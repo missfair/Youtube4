@@ -1,0 +1,891 @@
+<Window x:Class="YoutubeAutomation.MultiImageWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        xmlns:local="clr-namespace:YoutubeAutomation"
+        xmlns:sys="clr-namespace:System;assembly=mscorlib"
+        mc:Ignorable="d"
+        Title="Multi-Image Video"
+        Height="900" Width="1300"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource MaterialDesign.Brush.Background}"
+        TextElement.Foreground="{DynamicResource MaterialDesign.Brush.Foreground}"
+        TextElement.FontWeight="Regular"
+        TextElement.FontSize="14"
+        FontFamily="{DynamicResource MaterialDesignFont}"
+        Closing="Window_Closing">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+        <local:InverseBooleanConverter x:Key="InverseBooleanConverter"/>
+        <local:EqualityToVisibilityConverter x:Key="EqualityToVisibilityConverter"/>
+        <local:StepStateToBackgroundConverter x:Key="StepStateToBackgroundConverter"/>
+        <local:StepStateToForegroundConverter x:Key="StepStateToForegroundConverter"/>
+        <local:NotEqualToVisibilityConverter x:Key="NotEqualToVisibilityConverter"/>
+        <local:FilePathToImageConverter x:Key="FilePathToImageConverter"/>
+
+        <sys:Int32 x:Key="Step0">0</sys:Int32>
+        <sys:Int32 x:Key="Step1">1</sys:Int32>
+        <sys:Int32 x:Key="Step2">2</sys:Int32>
+        <sys:Int32 x:Key="Step3">3</sys:Int32>
+        <sys:Int32 x:Key="Step4">4</sys:Int32>
+        <sys:Int32 x:Key="Step5">5</sys:Int32>
+    </Window.Resources>
+
+    <Grid>
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <!-- Header -->
+        <materialDesign:Card Grid.Row="0" Margin="16,16,16,8" Padding="16">
+            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <materialDesign:PackIcon Kind="ImageMultiple" Width="32" Height="32"
+                    Foreground="{DynamicResource PrimaryHueMidBrush}" VerticalAlignment="Center"/>
+                <TextBlock Text="Multi-Image Video" Style="{StaticResource MaterialDesignHeadline5TextBlock}"
+                    Margin="12,0,0,0" VerticalAlignment="Center"/>
+                <Border Background="{DynamicResource PrimaryHueLightBrush}" CornerRadius="4"
+                        Padding="8,4" Margin="32,0,0,0" VerticalAlignment="Center">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="EP" FontWeight="Bold" FontSize="18" VerticalAlignment="Center"
+                                   Foreground="{DynamicResource PrimaryHueDarkBrush}"/>
+                        <TextBox Text="{Binding EpisodeNumber, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                 Width="70" FontSize="20" FontWeight="Bold" VerticalAlignment="Center"
+                                 Margin="4,0,0,0" TextAlignment="Center"/>
+                    </StackPanel>
+                </Border>
+            </StackPanel>
+        </materialDesign:Card>
+
+        <!-- Step Bar -->
+        <materialDesign:Card Grid.Row="1" Margin="16,8,16,8" Padding="16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="*"/>
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0" Command="{Binding GoToStepCommand}" CommandParameter="{StaticResource Step0}"
+                        Style="{StaticResource MaterialDesignFlatButton}" Height="Auto" Padding="8">
+                    <Button.Background>
+                        <MultiBinding Converter="{StaticResource StepStateToBackgroundConverter}">
+                            <Binding Path="CurrentStepIndex"/>
+                            <Binding Source="{StaticResource Step0}"/>
+                            <Binding Path="StepCompleted[0]"/>
+                        </MultiBinding>
+                    </Button.Background>
+                    <StackPanel>
+                        <Grid HorizontalAlignment="Center">
+                            <materialDesign:PackIcon Kind="Script" Width="24" Height="24"/>
+                            <materialDesign:PackIcon Kind="CheckCircle" Width="14" Height="14" Foreground="Green"
+                                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-4,0"
+                                Visibility="{Binding StepCompleted[0], Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        </Grid>
+                        <TextBlock Text="1. บท" HorizontalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="1" Command="{Binding GoToStepCommand}" CommandParameter="{StaticResource Step1}"
+                        Style="{StaticResource MaterialDesignFlatButton}" Height="Auto" Padding="8">
+                    <Button.Background>
+                        <MultiBinding Converter="{StaticResource StepStateToBackgroundConverter}">
+                            <Binding Path="CurrentStepIndex"/>
+                            <Binding Source="{StaticResource Step1}"/>
+                            <Binding Path="StepCompleted[1]"/>
+                        </MultiBinding>
+                    </Button.Background>
+                    <StackPanel>
+                        <materialDesign:PackIcon Kind="FileFind" Width="24" Height="24" HorizontalAlignment="Center"/>
+                        <TextBlock Text="2. ตรวจ" HorizontalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="2" Command="{Binding GoToStepCommand}" CommandParameter="{StaticResource Step2}"
+                        Style="{StaticResource MaterialDesignFlatButton}" Height="Auto" Padding="8">
+                    <Button.Background>
+                        <MultiBinding Converter="{StaticResource StepStateToBackgroundConverter}">
+                            <Binding Path="CurrentStepIndex"/>
+                            <Binding Source="{StaticResource Step2}"/>
+                            <Binding Path="StepCompleted[2]"/>
+                        </MultiBinding>
+                    </Button.Background>
+                    <StackPanel>
+                        <Grid HorizontalAlignment="Center">
+                            <materialDesign:PackIcon Kind="Image" Width="24" Height="24"/>
+                            <materialDesign:PackIcon Kind="CheckCircle" Width="14" Height="14" Foreground="Green"
+                                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-4,0"
+                                Visibility="{Binding StepCompleted[2], Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        </Grid>
+                        <TextBlock Text="3. ภาพ" HorizontalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="3" Command="{Binding GoToStepCommand}" CommandParameter="{StaticResource Step3}"
+                        Style="{StaticResource MaterialDesignFlatButton}" Height="Auto" Padding="8">
+                    <Button.Background>
+                        <MultiBinding Converter="{StaticResource StepStateToBackgroundConverter}">
+                            <Binding Path="CurrentStepIndex"/>
+                            <Binding Source="{StaticResource Step3}"/>
+                            <Binding Path="StepCompleted[3]"/>
+                        </MultiBinding>
+                    </Button.Background>
+                    <StackPanel>
+                        <Grid HorizontalAlignment="Center">
+                            <materialDesign:PackIcon Kind="VolumeHigh" Width="24" Height="24"/>
+                            <materialDesign:PackIcon Kind="CheckCircle" Width="14" Height="14" Foreground="Green"
+                                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-4,0"
+                                Visibility="{Binding StepCompleted[3], Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        </Grid>
+                        <TextBlock Text="4. เสียง" HorizontalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="4" Command="{Binding GoToStepCommand}" CommandParameter="{StaticResource Step4}"
+                        Style="{StaticResource MaterialDesignFlatButton}" Height="Auto" Padding="8">
+                    <Button.Background>
+                        <MultiBinding Converter="{StaticResource StepStateToBackgroundConverter}">
+                            <Binding Path="CurrentStepIndex"/>
+                            <Binding Source="{StaticResource Step4}"/>
+                            <Binding Path="StepCompleted[4]"/>
+                        </MultiBinding>
+                    </Button.Background>
+                    <StackPanel>
+                        <Grid HorizontalAlignment="Center">
+                            <materialDesign:PackIcon Kind="Video" Width="24" Height="24"/>
+                            <materialDesign:PackIcon Kind="CheckCircle" Width="14" Height="14" Foreground="Green"
+                                HorizontalAlignment="Right" VerticalAlignment="Bottom" Margin="0,0,-4,0"
+                                Visibility="{Binding StepCompleted[4], Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                        </Grid>
+                        <TextBlock Text="5. วิดีโอ" HorizontalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="5" Command="{Binding GoToStepCommand}" CommandParameter="{StaticResource Step5}"
+                        Style="{StaticResource MaterialDesignFlatButton}" Height="Auto" Padding="8">
+                    <Button.Background>
+                        <MultiBinding Converter="{StaticResource StepStateToBackgroundConverter}">
+                            <Binding Path="CurrentStepIndex"/>
+                            <Binding Source="{StaticResource Step5}"/>
+                            <Binding Path="StepCompleted[5]"/>
+                        </MultiBinding>
+                    </Button.Background>
+                    <StackPanel>
+                        <materialDesign:PackIcon Kind="CheckAll" Width="24" Height="24" HorizontalAlignment="Center"/>
+                        <TextBlock Text="6. เสร็จ" HorizontalAlignment="Center" FontSize="12"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </materialDesign:Card>
+
+        <!-- Main Content -->
+        <Grid Grid.Row="2" Margin="16,8,16,8">
+            <materialDesign:Card Padding="24">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <Grid>
+                        <!-- Step 0: Script Generation -->
+                        <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=0}">
+                            <TextBlock Text="Step 1: สร้างบทแบบ Scene" Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,16"/>
+
+                            <TextBlock Text="หัวข้อเรื่อง:" Margin="0,0,0,8"/>
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <TextBox Text="{Binding TopicText, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                         materialDesign:HintAssist.Hint="หัวข้อ..." Margin="0,0,8,0"/>
+                                <Button Grid.Column="1" Command="{Binding GenerateSceneScriptCommand}"
+                                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                                        Style="{StaticResource MaterialDesignRaisedButton}" Margin="0,0,8,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="AutoFix" VerticalAlignment="Center"/>
+                                        <TextBlock Text="สร้างบท Scene" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+                                <Button Grid.Column="2" Command="{Binding RunAllCommand}"
+                                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                                        Style="{StaticResource MaterialDesignRaisedSecondaryButton}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="PlayCircle" VerticalAlignment="Center"/>
+                                        <TextBlock Text="รันทั้งหมด" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+                            </Grid>
+
+                            <!-- Show Parts summary -->
+                            <ItemsControl ItemsSource="{Binding Parts}" Margin="0,24,0,0">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <materialDesign:Card Padding="12" Margin="0,0,0,8">
+                                            <StackPanel>
+                                                <TextBlock FontWeight="Bold">
+                                                    <Run Text="Part "/>
+                                                    <Run Text="{Binding PartNumber, Mode=OneWay}"/>
+                                                    <Run Text=" - "/>
+                                                    <Run Text="{Binding Scenes.Count, Mode=OneWay, StringFormat='{}{0} scenes'}"/>
+                                                </TextBlock>
+                                                <ItemsControl ItemsSource="{Binding Scenes}" Margin="16,4,0,0">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <TextBlock Opacity="0.7" FontSize="12" TextTrimming="CharacterEllipsis" MaxWidth="800" HorizontalAlignment="Left">
+                                                                <Run Text="Scene "/>
+                                                                <Run Text="{Binding SceneIndex, Mode=OneWay}"/>
+                                                                <Run Text=": "/>
+                                                                <Run Text="{Binding Text, Mode=OneWay}"/>
+                                                            </TextBlock>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </materialDesign:Card>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <!-- Step 1: Review/Edit Scenes -->
+                        <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=1}">
+                            <TextBlock Text="Step 2: ตรวจ/แก้ไข Scenes" Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,16"/>
+
+                            <ItemsControl ItemsSource="{Binding Parts}">
+                                <ItemsControl.ItemTemplate>
+                                    <DataTemplate>
+                                        <materialDesign:Card Padding="16" Margin="0,0,0,16">
+                                            <StackPanel>
+                                                <TextBlock FontWeight="Bold" FontSize="16" Margin="0,0,0,12">
+                                                    <Run Text="Part "/>
+                                                    <Run Text="{Binding PartNumber, Mode=OneWay}"/>
+                                                </TextBlock>
+                                                <ItemsControl ItemsSource="{Binding Scenes}">
+                                                    <ItemsControl.ItemTemplate>
+                                                        <DataTemplate>
+                                                            <Border BorderBrush="Gray" BorderThickness="0,0,0,1" Padding="0,8" Margin="0,0,0,8">
+                                                                <Grid>
+                                                                    <Grid.ColumnDefinitions>
+                                                                        <ColumnDefinition Width="Auto"/>
+                                                                        <ColumnDefinition Width="*"/>
+                                                                        <ColumnDefinition Width="300"/>
+                                                                    </Grid.ColumnDefinitions>
+                                                                    <TextBlock Grid.Column="0" FontWeight="Bold" VerticalAlignment="Top" Margin="0,0,8,0" Width="70">
+                                                                        <Run Text="Scene "/>
+                                                                        <Run Text="{Binding SceneIndex, Mode=OneWay}"/>
+                                                                    </TextBlock>
+                                                                    <TextBox Grid.Column="1" Text="{Binding Text, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                             AcceptsReturn="True" TextWrapping="Wrap" Height="100"
+                                                                             VerticalScrollBarVisibility="Auto" Margin="0,0,8,0"/>
+                                                                    <StackPanel Grid.Column="2">
+                                                                        <TextBlock Text="Image Prompt:" FontSize="11" Opacity="0.7"/>
+                                                                        <TextBox Text="{Binding ImagePrompt, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                                                                 AcceptsReturn="True" TextWrapping="Wrap" Height="80"
+                                                                                 VerticalScrollBarVisibility="Auto"/>
+                                                                    </StackPanel>
+                                                                </Grid>
+                                                            </Border>
+                                                        </DataTemplate>
+                                                    </ItemsControl.ItemTemplate>
+                                                </ItemsControl>
+                                            </StackPanel>
+                                        </materialDesign:Card>
+                                    </DataTemplate>
+                                </ItemsControl.ItemTemplate>
+                            </ItemsControl>
+                        </StackPanel>
+
+                        <!-- Step 2: Image Generation -->
+                        <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=2}">
+                            <TextBlock Text="Step 3: สร้างภาพ (Stable Diffusion)" Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,8"/>
+
+                            <!-- Reference Image Section -->
+                            <Border BorderBrush="{DynamicResource PrimaryHueMidBrush}" BorderThickness="1"
+                                    CornerRadius="4" Padding="12" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Preview thumbnail -->
+                                    <Border Width="120" Height="68" Background="LightGray" CornerRadius="4"
+                                            VerticalAlignment="Center">
+                                        <Image Source="{Binding ReferenceImagePath, Converter={StaticResource FilePathToImageConverter}}" Stretch="Uniform"/>
+                                    </Border>
+
+                                    <!-- Info + Controls -->
+                                    <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <TextBlock Text="ภาพอ้างอิง (Reference Image)" FontWeight="Bold" FontSize="13"/>
+                                        <TextBlock Text="ทุก scene จะถูกสร้างให้มีสไตล์/สีใกล้เคียงกับภาพนี้ (img2img)"
+                                                   FontSize="11" Opacity="0.6"/>
+
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                            <Button Command="{Binding BrowseReferenceImageCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                    Padding="8,2" Height="28" FontSize="11">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <materialDesign:PackIcon Kind="Image" Width="14" Height="14" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="เลือกภาพ" Margin="4,0,0,0"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Command="{Binding ClearReferenceImageCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                    Padding="8,2" Height="28" FontSize="11" Margin="8,0,0,0"
+                                                    Foreground="OrangeRed" BorderBrush="OrangeRed">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <materialDesign:PackIcon Kind="Close" Width="14" Height="14" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="ล้าง" Margin="4,0,0,0"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </StackPanel>
+
+                                        <!-- Denoising Strength Slider -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                            <TextBlock Text="ความอิสระ:" FontSize="12" VerticalAlignment="Center" Width="70"/>
+                                            <Slider Value="{Binding DenoisingStrength}" Minimum="0.3" Maximum="0.95"
+                                                    Width="150" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                                    VerticalAlignment="Center"/>
+                                            <TextBlock FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                       Text="{Binding DenoisingStrength, StringFormat={}{0:P0}}"/>
+                                            <TextBlock FontSize="10" Opacity="0.5" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                       Text="(ต่ำ = เหมือน reference มาก, สูง = อิสระมาก)"/>
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
+
+                            <!-- Style Toggle + Generate + Clear -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                <Button Command="{Binding GenerateAllImagesCommand}"
+                                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                                        Style="{StaticResource MaterialDesignRaisedButton}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="ImageAutoAdjust" VerticalAlignment="Center"/>
+                                        <TextBlock Text="สร้างภาพทั้งหมด" Margin="8,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+
+                                <!-- Generate All (No Chaining, txt2img only) -->
+                                <Button Command="{Binding GenerateAllImagesNoChainingCommand}"
+                                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                                        Style="{StaticResource MaterialDesignOutlinedButton}"
+                                        Margin="8,0,0,0"
+                                        ToolTip="สร้างภาพแต่ละ scene อิสระ (txt2img) ไม่ใช้ reference / ไม่ chain">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="ImageMultiple" VerticalAlignment="Center"/>
+                                        <TextBlock Text="สร้างภาพ (อิสระ)" Margin="4,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+
+                                <!-- Auto: Images → Audio → Video -->
+                                <Button Command="{Binding AutoFromImagesCommand}"
+                                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                                        Style="{StaticResource MaterialDesignRaisedSecondaryButton}"
+                                        Margin="8,0,0,0"
+                                        ToolTip="รันอัตโนมัติ: สร้างภาพที่เหลือ → เสียง → วิดีโอ">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="FastForward" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Auto ถึงวิดีโอ" Margin="4,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+
+                                <!-- Clear All Images -->
+                                <Button Command="{Binding ClearAllImagesCommand}"
+                                        Style="{StaticResource MaterialDesignOutlinedButton}"
+                                        Padding="8,2" Height="36" Margin="8,0,0,0"
+                                        Foreground="OrangeRed" BorderBrush="OrangeRed"
+                                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="DeleteSweep" Width="18" Height="18" VerticalAlignment="Center"/>
+                                        <TextBlock Text="ล้างภาพทั้งหมด" Margin="4,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+
+                                <!-- Style Toggle -->
+                                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="4"
+                                        Padding="8,4" Margin="16,0,0,0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="Palette" Width="16" Height="16"
+                                                                 VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="สไตล์:" FontSize="12" VerticalAlignment="Center"/>
+                                        <ToggleButton IsChecked="{Binding IsRealisticStyle}"
+                                                      Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                                                      Margin="8,0,8,0" VerticalAlignment="Center"/>
+                                        <TextBlock FontSize="12" FontWeight="Bold" VerticalAlignment="Center">
+                                            <TextBlock.Style>
+                                                <Style TargetType="TextBlock">
+                                                    <Setter Property="Text" Value="การ์ตูน"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding IsRealisticStyle}" Value="True">
+                                                            <Setter Property="Text" Value="ภาพจริง"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </TextBlock.Style>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- Scene Chaining Toggle -->
+                                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="4"
+                                        Padding="8,4" Margin="8,0,0,0" VerticalAlignment="Center">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="LinkVariant" Width="16" Height="16"
+                                                                 VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="Scene ต่อเนื่อง:" FontSize="12" VerticalAlignment="Center"/>
+                                        <ToggleButton IsChecked="{Binding UseSceneChaining}"
+                                                      Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                                                      Margin="8,0,4,0" VerticalAlignment="Center"/>
+                                        <TextBlock FontSize="10" Opacity="0.6" VerticalAlignment="Center"
+                                                   Text="(ใช้ภาพก่อนหน้าเป็น ref เหมือน Flow)"/>
+                                    </StackPanel>
+                                </Border>
+
+                                <TextBlock VerticalAlignment="Center" Margin="16,0,0,0">
+                                    <Run Text="สร้างแล้ว: "/>
+                                    <Run Text="{Binding ImagesGenerated, Mode=OneWay}"/>
+                                    <Run Text="/"/>
+                                    <Run Text="{Binding TotalImages, Mode=OneWay}"/>
+                                    <Run Text=" ภาพ"/>
+                                </TextBlock>
+                            </StackPanel>
+
+                            <!-- SD Forge Control Panel -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                                <!-- Status Indicator -->
+                                <Ellipse Width="12" Height="12" VerticalAlignment="Center">
+                                    <Ellipse.Style>
+                                        <Style TargetType="Ellipse">
+                                            <Setter Property="Fill" Value="Gray"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSdConnected}" Value="True">
+                                                    <Setter Property="Fill" Value="Green"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsSdStarting}" Value="True">
+                                                    <Setter Property="Fill" Value="Orange"/>
+                                                </DataTrigger>
+                                                <MultiDataTrigger>
+                                                    <MultiDataTrigger.Conditions>
+                                                        <Condition Binding="{Binding IsSdConnected}" Value="False"/>
+                                                        <Condition Binding="{Binding IsSdStarting}" Value="False"/>
+                                                    </MultiDataTrigger.Conditions>
+                                                    <Setter Property="Fill" Value="Red"/>
+                                                </MultiDataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Ellipse.Style>
+                                </Ellipse>
+                                <TextBlock Text="{Binding SdStatusText}" VerticalAlignment="Center"
+                                           Margin="4,0,8,0" FontSize="12" Opacity="0.8"/>
+
+                                <!-- Launch Button (show when not connected) -->
+                                <Button Command="{Binding LaunchSdCommand}"
+                                        Padding="8,2" Height="30" FontSize="12" Margin="0,0,4,0"
+                                        IsEnabled="{Binding IsSdStarting, Converter={StaticResource InverseBooleanConverter}}">
+                                    <Button.Style>
+                                        <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignOutlinedButton}">
+                                            <Setter Property="Visibility" Value="Visible"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsSdConnected}" Value="True">
+                                                    <Setter Property="Visibility" Value="Collapsed"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Button.Style>
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="Play" Width="16" Height="16" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Launch SD" Margin="4,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+
+                                <!-- Stop Button (show when connected) -->
+                                <Button Command="{Binding StopSdCommand}"
+                                        Style="{StaticResource MaterialDesignOutlinedButton}"
+                                        Padding="8,2" Height="30" FontSize="12" Margin="0,0,4,0"
+                                        Foreground="OrangeRed" BorderBrush="OrangeRed"
+                                        Visibility="{Binding IsSdConnected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="Stop" Width="16" Height="16" VerticalAlignment="Center"/>
+                                        <TextBlock Text="Stop SD" Margin="4,0,0,0"/>
+                                    </StackPanel>
+                                </Button>
+
+                                <!-- Browse SD Path -->
+                                <Button Command="{Binding OpenSdPathBrowserCommand}"
+                                        Style="{StaticResource MaterialDesignOutlinedButton}"
+                                        Padding="4" Height="30" Margin="0,0,4,0"
+                                        ToolTip="เปลี่ยนที่ตั้ง SD Forge">
+                                    <materialDesign:PackIcon Kind="FolderCog" Width="16" Height="16"/>
+                                </Button>
+
+                                <!-- Loading spinner -->
+                                <ProgressBar IsIndeterminate="True" Width="100" Height="4" Margin="8,0,0,0"
+                                             VerticalAlignment="Center"
+                                             Visibility="{Binding IsSdStarting, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+
+                                <!-- Model Selector -->
+                                <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="4"
+                                        Padding="6,2" Margin="12,0,0,0" VerticalAlignment="Center"
+                                        Visibility="{Binding IsSdConnected, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="CubeOutline" Width="16" Height="16"
+                                                                 VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <TextBlock Text="Model:" FontSize="12" VerticalAlignment="Center"/>
+                                        <ComboBox ItemsSource="{Binding AvailableModels}"
+                                                  SelectedItem="{Binding SelectedModel}"
+                                                  Width="280" FontSize="11" Margin="4,0,4,0"
+                                                  VerticalAlignment="Center"
+                                                  materialDesign:HintAssist.Hint="เลือก model..."
+                                                  IsEnabled="{Binding IsModelLoading, Converter={StaticResource InverseBooleanConverter}}"/>
+                                        <Button Command="{Binding RefreshModelsCommand}"
+                                                Style="{StaticResource MaterialDesignIconButton}"
+                                                Width="28" Height="28" Padding="0"
+                                                ToolTip="รีเฟรชรายชื่อ model"
+                                                IsEnabled="{Binding IsModelLoading, Converter={StaticResource InverseBooleanConverter}}">
+                                            <materialDesign:PackIcon Kind="Refresh" Width="16" Height="16"/>
+                                        </Button>
+                                        <ProgressBar IsIndeterminate="True" Width="60" Height="3" Margin="4,0,0,0"
+                                                     VerticalAlignment="Center"
+                                                     Visibility="{Binding IsModelLoading, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+
+                            <WrapPanel>
+                                <ItemsControl ItemsSource="{Binding AllScenes}">
+                                    <ItemsControl.ItemsPanel>
+                                        <ItemsPanelTemplate>
+                                            <WrapPanel/>
+                                        </ItemsPanelTemplate>
+                                    </ItemsControl.ItemsPanel>
+                                    <ItemsControl.ItemTemplate>
+                                        <DataTemplate>
+                                            <materialDesign:Card Width="220" Margin="4" Padding="8">
+                                                <StackPanel>
+                                                    <Grid Height="124" Margin="0,0,0,4">
+                                                        <Border Background="LightGray" CornerRadius="4">
+                                                            <Image Source="{Binding ImagePath, Converter={StaticResource FilePathToImageConverter}}" Stretch="Uniform"/>
+                                                        </Border>
+                                                        <!-- Clear Image (X) button -->
+                                                        <Button Command="{Binding DataContext.ClearImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding}"
+                                                                Style="{StaticResource MaterialDesignIconButton}"
+                                                                Width="24" Height="24" Padding="0"
+                                                                HorizontalAlignment="Right" VerticalAlignment="Top" Margin="0,2,2,0"
+                                                                ToolTip="ล้างภาพนี้ แล้วกด 'สร้างภาพทั้งหมด' เพื่อ gen ใหม่">
+                                                            <materialDesign:PackIcon Kind="Close" Width="14" Height="14" Foreground="Red"/>
+                                                        </Button>
+                                                    </Grid>
+                                                    <TextBlock FontSize="11" FontWeight="Bold">
+                                                        <Run Text="Scene "/>
+                                                        <Run Text="{Binding SceneIndex, Mode=OneWay}"/>
+                                                    </TextBlock>
+                                                    <TextBlock Text="{Binding ImagePrompt}" FontSize="10" Opacity="0.6"
+                                                               TextTrimming="CharacterEllipsis" MaxHeight="30"
+                                                               ToolTip="{Binding ImagePrompt}"/>
+                                                    <!-- Action buttons row -->
+                                                    <UniformGrid Columns="3" Margin="0,4,0,0">
+                                                        <Button Command="{Binding DataContext.CopyScenePromptCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding}"
+                                                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                                Padding="2" Height="28" FontSize="10"
+                                                                ToolTip="คัดลอก prompt เพื่อไปใช้ใน Nano Banana / Gemini">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <materialDesign:PackIcon Kind="ContentCopy" Width="13" Height="13"/>
+                                                                <TextBlock Text="Copy" Margin="2,0,0,0"/>
+                                                            </StackPanel>
+                                                        </Button>
+                                                        <Button Command="{Binding DataContext.BrowseSceneImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding}"
+                                                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                                Padding="2" Height="28" FontSize="10" Margin="2,0,2,0"
+                                                                ToolTip="นำเข้าภาพจากไฟล์ (เช่น ภาพจาก Nano Banana)">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <materialDesign:PackIcon Kind="FolderImage" Width="13" Height="13"/>
+                                                                <TextBlock Text="Browse" Margin="2,0,0,0"/>
+                                                            </StackPanel>
+                                                        </Button>
+                                                        <Button Command="{Binding DataContext.RegenerateImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                                CommandParameter="{Binding}"
+                                                                Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                                Padding="2" Height="28" FontSize="10"
+                                                                ToolTip="สร้างภาพใหม่ด้วย Stable Diffusion">
+                                                            <StackPanel Orientation="Horizontal">
+                                                                <materialDesign:PackIcon Kind="Refresh" Width="13" Height="13"/>
+                                                                <TextBlock Text="Regen" Margin="2,0,0,0"/>
+                                                            </StackPanel>
+                                                        </Button>
+                                                    </UniformGrid>
+                                                </StackPanel>
+                                            </materialDesign:Card>
+                                        </DataTemplate>
+                                    </ItemsControl.ItemTemplate>
+                                </ItemsControl>
+                            </WrapPanel>
+                        </StackPanel>
+
+                        <!-- Step 3: Audio Generation -->
+                        <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=3}">
+                            <TextBlock Text="Step 4: สร้างเสียง (TTS)" Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,16"/>
+
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="*"/>
+                                </Grid.ColumnDefinitions>
+
+                                <materialDesign:Card Grid.Column="0" Margin="0,0,8,0" Padding="16">
+                                    <StackPanel>
+                                        <TextBlock Text="Part 1" FontWeight="Bold" Margin="0,0,0,8"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <Button Command="{Binding GenerateAudioCommand}"
+                                                    Style="{StaticResource MaterialDesignRaisedButton}"
+                                                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                                                <Button.CommandParameter><sys:Int32>1</sys:Int32></Button.CommandParameter>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <materialDesign:PackIcon Kind="RecordVoiceOver" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="สร้างเสียง" Margin="4,0,0,0"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Command="{Binding BrowseAudioFileCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}" Margin="4,0,0,0" Padding="4"
+                                                    ToolTip="เลือกไฟล์">
+                                                <Button.CommandParameter><sys:Int32>1</sys:Int32></Button.CommandParameter>
+                                                <materialDesign:PackIcon Kind="FolderOpen"/>
+                                            </Button>
+                                            <Button Command="{Binding ToggleAudioPlaybackCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}" Margin="4,0,0,0" Padding="4"
+                                                    ToolTip="เล่น/หยุด">
+                                                <Button.CommandParameter><sys:Int32>0</sys:Int32></Button.CommandParameter>
+                                                <Grid>
+                                                    <materialDesign:PackIcon Kind="Play"
+                                                        Visibility="{Binding PlayingAudioIndex, Converter={StaticResource NotEqualToVisibilityConverter}, ConverterParameter=0}"/>
+                                                    <materialDesign:PackIcon Kind="Stop"
+                                                        Visibility="{Binding PlayingAudioIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=0}"/>
+                                                </Grid>
+                                            </Button>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Parts[0].AudioPath}" FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
+                                        <TextBlock FontSize="12" Foreground="{DynamicResource PrimaryHueMidBrush}" Margin="0,4,0,0">
+                                            <Run Text="ความยาว: "/>
+                                            <Run Text="{Binding Parts[0].AudioDurationSeconds, Mode=OneWay, StringFormat='{}{0:F0} วินาที'}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </materialDesign:Card>
+
+                                <materialDesign:Card Grid.Column="1" Margin="8,0,8,0" Padding="16">
+                                    <StackPanel>
+                                        <TextBlock Text="Part 2" FontWeight="Bold" Margin="0,0,0,8"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <Button Command="{Binding GenerateAudioCommand}"
+                                                    Style="{StaticResource MaterialDesignRaisedButton}"
+                                                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                                                <Button.CommandParameter><sys:Int32>2</sys:Int32></Button.CommandParameter>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <materialDesign:PackIcon Kind="RecordVoiceOver" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="สร้างเสียง" Margin="4,0,0,0"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Command="{Binding BrowseAudioFileCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}" Margin="4,0,0,0" Padding="4"
+                                                    ToolTip="เลือกไฟล์">
+                                                <Button.CommandParameter><sys:Int32>2</sys:Int32></Button.CommandParameter>
+                                                <materialDesign:PackIcon Kind="FolderOpen"/>
+                                            </Button>
+                                            <Button Command="{Binding ToggleAudioPlaybackCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}" Margin="4,0,0,0" Padding="4"
+                                                    ToolTip="เล่น/หยุด">
+                                                <Button.CommandParameter><sys:Int32>1</sys:Int32></Button.CommandParameter>
+                                                <Grid>
+                                                    <materialDesign:PackIcon Kind="Play"
+                                                        Visibility="{Binding PlayingAudioIndex, Converter={StaticResource NotEqualToVisibilityConverter}, ConverterParameter=1}"/>
+                                                    <materialDesign:PackIcon Kind="Stop"
+                                                        Visibility="{Binding PlayingAudioIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=1}"/>
+                                                </Grid>
+                                            </Button>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Parts[1].AudioPath}" FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
+                                        <TextBlock FontSize="12" Foreground="{DynamicResource PrimaryHueMidBrush}" Margin="0,4,0,0">
+                                            <Run Text="ความยาว: "/>
+                                            <Run Text="{Binding Parts[1].AudioDurationSeconds, Mode=OneWay, StringFormat='{}{0:F0} วินาที'}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </materialDesign:Card>
+
+                                <materialDesign:Card Grid.Column="2" Margin="8,0,0,0" Padding="16">
+                                    <StackPanel>
+                                        <TextBlock Text="Part 3" FontWeight="Bold" Margin="0,0,0,8"/>
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                            <Button Command="{Binding GenerateAudioCommand}"
+                                                    Style="{StaticResource MaterialDesignRaisedButton}"
+                                                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                                                <Button.CommandParameter><sys:Int32>3</sys:Int32></Button.CommandParameter>
+                                                <StackPanel Orientation="Horizontal">
+                                                    <materialDesign:PackIcon Kind="RecordVoiceOver" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="สร้างเสียง" Margin="4,0,0,0"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Command="{Binding BrowseAudioFileCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}" Margin="4,0,0,0" Padding="4"
+                                                    ToolTip="เลือกไฟล์">
+                                                <Button.CommandParameter><sys:Int32>3</sys:Int32></Button.CommandParameter>
+                                                <materialDesign:PackIcon Kind="FolderOpen"/>
+                                            </Button>
+                                            <Button Command="{Binding ToggleAudioPlaybackCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}" Margin="4,0,0,0" Padding="4"
+                                                    ToolTip="เล่น/หยุด">
+                                                <Button.CommandParameter><sys:Int32>2</sys:Int32></Button.CommandParameter>
+                                                <Grid>
+                                                    <materialDesign:PackIcon Kind="Play"
+                                                        Visibility="{Binding PlayingAudioIndex, Converter={StaticResource NotEqualToVisibilityConverter}, ConverterParameter=2}"/>
+                                                    <materialDesign:PackIcon Kind="Stop"
+                                                        Visibility="{Binding PlayingAudioIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=2}"/>
+                                                </Grid>
+                                            </Button>
+                                        </StackPanel>
+                                        <TextBlock Text="{Binding Parts[2].AudioPath}" FontSize="11" Opacity="0.7" TextWrapping="Wrap"/>
+                                        <TextBlock FontSize="12" Foreground="{DynamicResource PrimaryHueMidBrush}" Margin="0,4,0,0">
+                                            <Run Text="ความยาว: "/>
+                                            <Run Text="{Binding Parts[2].AudioDurationSeconds, Mode=OneWay, StringFormat='{}{0:F0} วินาที'}"/>
+                                        </TextBlock>
+                                    </StackPanel>
+                                </materialDesign:Card>
+                            </Grid>
+
+                            <Button Command="{Binding GenerateAllAudioCommand}" Margin="0,16,0,0"
+                                    Style="{StaticResource MaterialDesignRaisedButton}" HorizontalAlignment="Center"
+                                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="RecordVoiceOver" VerticalAlignment="Center"/>
+                                    <TextBlock Text="สร้างเสียงทั้งหมด (1-2-3)" Margin="8,0,0,0"/>
+                                </StackPanel>
+                            </Button>
+                        </StackPanel>
+
+                        <!-- Step 4: Video Creation -->
+                        <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=4}">
+                            <TextBlock Text="Step 5: สร้างวิดีโอ Multi-Image" Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,16"/>
+
+                            <materialDesign:Card Padding="16" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <TextBlock Text="สรุปก่อนสร้างวิดีโอ" FontWeight="Bold" Margin="0,0,0,8"/>
+                                    <TextBlock>
+                                        <Run Text="ภาพทั้งหมด: "/>
+                                        <Run Text="{Binding TotalSceneCount, Mode=OneWay}"/>
+                                        <Run Text=" scenes"/>
+                                    </TextBlock>
+                                    <TextBlock Text="Ken Burns: zoom in/out สลับ + fade transition 1 วินาที"/>
+                                    <TextBlock Text="Output: 1920x1080 (Full HD)"/>
+                                </StackPanel>
+                            </materialDesign:Card>
+
+                            <Button Command="{Binding CreateVideoCommand}"
+                                    Style="{StaticResource MaterialDesignRaisedButton}"
+                                    HorizontalAlignment="Center" Padding="32,8"
+                                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="MovieCreation" VerticalAlignment="Center" Width="24" Height="24"/>
+                                    <TextBlock Text="สร้างวิดีโอ Multi-Image" Margin="8,0,0,0" FontSize="16"/>
+                                </StackPanel>
+                            </Button>
+
+                            <TextBlock Text="วิดีโอที่สร้าง:" FontWeight="Bold" Margin="0,24,0,4"/>
+                            <TextBlock Text="{Binding FinalVideoPath}" Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                        </StackPanel>
+
+                        <!-- Step 5: Done -->
+                        <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=5}">
+                            <TextBlock Text="สร้างวิดีโอสำเร็จ!" Style="{StaticResource MaterialDesignHeadline5TextBlock}"
+                                       HorizontalAlignment="Center" Margin="0,32,0,24"
+                                       Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+
+                            <materialDesign:Card Padding="24" HorizontalAlignment="Center" MinWidth="500">
+                                <StackPanel>
+                                    <TextBlock FontSize="14" Margin="0,0,0,8">
+                                        <Run Text="ไฟล์: " FontWeight="Bold"/>
+                                        <Run Text="{Binding FinalVideoPath, Mode=OneWay}"/>
+                                    </TextBlock>
+                                    <TextBlock FontSize="14" Margin="0,0,0,8">
+                                        <Run Text="จำนวนภาพ: " FontWeight="Bold"/>
+                                        <Run Text="{Binding TotalSceneCount, Mode=OneWay}"/>
+                                        <Run Text=" scenes"/>
+                                    </TextBlock>
+
+                                    <StackPanel Orientation="Horizontal" Margin="0,16,0,0">
+                                        <Button Command="{Binding OpenOutputFolderCommand}" Style="{StaticResource MaterialDesignRaisedButton}" Margin="0,0,8,0">
+                                            <StackPanel Orientation="Horizontal">
+                                                <materialDesign:PackIcon Kind="FolderOpen" VerticalAlignment="Center"/>
+                                                <TextBlock Text="เปิดโฟลเดอร์" Margin="8,0,0,0"/>
+                                            </StackPanel>
+                                        </Button>
+                                        <Button Command="{Binding OpenVideoCommand}" Style="{StaticResource MaterialDesignOutlinedButton}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <materialDesign:PackIcon Kind="Play" VerticalAlignment="Center"/>
+                                                <TextBlock Text="เปิดวิดีโอ" Margin="8,0,0,0"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </StackPanel>
+                            </materialDesign:Card>
+                        </StackPanel>
+                    </Grid>
+                </ScrollViewer>
+            </materialDesign:Card>
+        </Grid>
+
+        <!-- Footer -->
+        <materialDesign:Card Grid.Row="3" Margin="16,8,16,16" Padding="16">
+            <Grid>
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                    <ColumnDefinition Width="Auto"/>
+                </Grid.ColumnDefinitions>
+
+                <StackPanel>
+                    <TextBlock Text="{Binding StatusMessage}" Margin="0,0,0,8"/>
+                    <ProgressBar Value="{Binding CurrentProgress}" Height="8"
+                                Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"/>
+                </StackPanel>
+
+                <Button Grid.Column="1" Command="{Binding CancelProcessingCommand}"
+                        Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
+                        Style="{StaticResource MaterialDesignOutlinedButton}" Margin="16,0,8,0"
+                        Foreground="Red" BorderBrush="Red">
+                    <StackPanel Orientation="Horizontal">
+                        <materialDesign:PackIcon Kind="Cancel" VerticalAlignment="Center"/>
+                        <TextBlock Text="ยกเลิก" Margin="4,0,0,0"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="2" Command="{Binding PreviousStepCommand}"
+                        Style="{StaticResource MaterialDesignOutlinedButton}" Margin="8,0,8,0">
+                    <StackPanel Orientation="Horizontal">
+                        <materialDesign:PackIcon Kind="ChevronLeft" VerticalAlignment="Center"/>
+                        <TextBlock Text="ย้อนกลับ" Margin="4,0,0,0"/>
+                    </StackPanel>
+                </Button>
+
+                <Button Grid.Column="3" Command="{Binding NextStepCommand}"
+                        Style="{StaticResource MaterialDesignRaisedButton}">
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="ถัดไป" Margin="0,0,4,0"/>
+                        <materialDesign:PackIcon Kind="ChevronRight" VerticalAlignment="Center"/>
+                    </StackPanel>
+                </Button>
+            </Grid>
+        </materialDesign:Card>
+
+        <!-- Snackbar -->
+        <materialDesign:Snackbar Grid.Row="3" MessageQueue="{Binding SnackbarQueue}" Panel.ZIndex="200"/>
+    </Grid>
+</Window>

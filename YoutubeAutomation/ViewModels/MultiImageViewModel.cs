@@ -39,16 +39,10 @@ public partial class MultiImageViewModel : ObservableObject
     private AudioFileReader? _bgmPreviewReader;
     private bool _isSyncingBgmSelection;
 
-    private const string CartoonStylePrefix = "(rich vibrant colors:1.3), comic book art style, bold black outlines, halftone dot shading, aged paper texture, detailed ink illustration, dramatic lighting, masterpiece, best quality, ";
-    private const string CartoonNegativePrompt = "text, letters, words, numbers, watermark, signature, logo, photographic, 3d render, anime, blurry, low quality, deformed, disfigured, out of frame, monochrome, grayscale, black and white";
-
-    private const string RealisticStylePrefix = "(photorealistic:1.3), professional photography, sharp focus, natural lighting, high detail, 8k uhd, DSLR quality, masterpiece, best quality, ";
-    private const string RealisticNegativePrompt = "text, letters, words, numbers, watermark, signature, logo, cartoon, anime, drawing, painting, illustration, 3d render, blurry, low quality, deformed, disfigured, out of frame";
-
     private const string ChainingConsistencyPrefix = "(consistent style:1.2), same character design, same color palette, continuation of scene, ";
 
-    private string StylePrefix => IsRealisticStyle ? RealisticStylePrefix : CartoonStylePrefix;
-    private string NegativePrompt => IsRealisticStyle ? RealisticNegativePrompt : CartoonNegativePrompt;
+    private string StylePrefix => IsRealisticStyle ? SelectedCategory.SdRealisticStylePrefix : SelectedCategory.SdCartoonStylePrefix;
+    private string NegativePrompt => IsRealisticStyle ? SelectedCategory.SdRealisticNegativePrompt : SelectedCategory.SdCartoonNegativePrompt;
 
     [ObservableProperty] private int currentStepIndex;
     [ObservableProperty] private bool isProcessing;
@@ -76,6 +70,10 @@ public partial class MultiImageViewModel : ObservableObject
     [ObservableProperty] private double bgmVolume = 0.25;
     [ObservableProperty] private bool isBgmPreviewPlaying;
     [ObservableProperty] private BgmTrackDisplayItem? selectedBgmTrack;
+    [ObservableProperty] private ContentCategory selectedCategory = ContentCategoryRegistry.Animal;
+    [ObservableProperty] private bool isCategoryLocked;
+
+    public ObservableCollection<ContentCategory> AvailableCategories { get; } = new(ContentCategoryRegistry.All);
 
     public string BgmFileName => string.IsNullOrWhiteSpace(BgmFilePath)
         ? "(ไม่ได้เลือก)"
@@ -124,6 +122,20 @@ public partial class MultiImageViewModel : ObservableObject
         {
             _settings.CloudImageModel = value;
             _settings.Save();
+        }
+    }
+
+    partial void OnSelectedCategoryChanged(ContentCategory value)
+    {
+        if (_isRestoringState) return;
+        IsRealisticStyle = value.DefaultRealisticStyle;
+        // Auto-set BGM to category default
+        var defaultTrack = BgmLibrary.GetTrackPath(value.DefaultBgmMood);
+        if (defaultTrack != null)
+        {
+            BgmFilePath = defaultTrack;
+            BgmEnabled = true;
+            SyncBgmSelection();
         }
     }
 
@@ -205,10 +217,17 @@ public partial class MultiImageViewModel : ObservableObject
         _settings = settings;
     }
 
-    public void Initialize(string topic, int epNumber, string? coverImagePath = null)
+    public void Initialize(string topic, int epNumber, string? coverImagePath = null, ContentCategory? category = null)
     {
         TopicText = topic;
         EpisodeNumber = epNumber;
+        if (category != null)
+        {
+            _categorySetByMainWindow = true;
+            _isRestoringState = true;
+            SelectedCategory = category;
+            _isRestoringState = false;
+        }
 
         // Try load saved state for this episode
         var stateLoaded = TryLoadState();
@@ -273,7 +292,7 @@ public partial class MultiImageViewModel : ObservableObject
         // Auto-set default BGM if none selected yet
         if (string.IsNullOrWhiteSpace(BgmFilePath))
         {
-            var defaultTrack = BgmLibrary.GetTrackPath("curious");
+            var defaultTrack = BgmLibrary.GetTrackPath(SelectedCategory.DefaultBgmMood);
             if (defaultTrack != null)
             {
                 BgmFilePath = defaultTrack;
@@ -354,6 +373,9 @@ public partial class MultiImageViewModel : ObservableObject
         // Reset to step 0
         CurrentStepIndex = 0;
 
+        // Unlock category for new project
+        IsCategoryLocked = false;
+
         // Keep: SelectedModel, ReferenceImagePath, DenoisingStrength, IsRealisticStyle, UseSceneChaining
 
         // Update settings
@@ -361,6 +383,98 @@ public partial class MultiImageViewModel : ObservableObject
         _settings.Save();
 
         SnackbarQueue.Enqueue($"เริ่มโปรเจคใหม่ EP{EpisodeNumber}");
+    }
+
+    // === Load Episode Folder ===
+    [RelayCommand]
+    private void LoadEpisodeFolder()
+    {
+        if (IsProcessing) return;
+
+        var dialog = new Microsoft.Win32.OpenFolderDialog
+        {
+            Title = "เลือกโฟลเดอร์ Episode ที่ต้องการโหลด"
+        };
+
+        if (!string.IsNullOrWhiteSpace(_settings.OutputBasePath) && Directory.Exists(_settings.OutputBasePath))
+            dialog.InitialDirectory = _settings.OutputBasePath;
+
+        if (dialog.ShowDialog() != true) return;
+
+        var folder = dialog.FolderName;
+        var folderName = Path.GetFileName(folder);
+
+        // Parse EP number from folder name (e.g. "EP39 ทำไม...")
+        if (folderName.StartsWith("EP", StringComparison.OrdinalIgnoreCase))
+        {
+            var numStr = new string(folderName.Skip(2).TakeWhile(char.IsDigit).ToArray());
+            if (int.TryParse(numStr, out var epNum))
+            {
+                // Save current before switching
+                SaveState();
+                StopAudioPlayback();
+
+                // Reset flag since user is browsing manually (not coming from MainWindow)
+                _categorySetByMainWindow = false;
+
+                EpisodeNumber = epNum;
+
+                // Extract topic from folder name (after "EPxx ")
+                var epPrefix = $"EP{epNum} ";
+                TopicText = folderName.StartsWith(epPrefix)
+                    ? folderName.Substring(epPrefix.Length)
+                    : "";
+
+                // Try load state from selected folder
+                try
+                {
+                    var state = MultiImageState.Load(folder);
+                    if (state != null && state.HasData())
+                    {
+                        RestoreFromState(state);
+                        UpdateStepCompletion();
+                        SnackbarQueue.Enqueue($"โหลด EP{epNum} สำเร็จ");
+                    }
+                    else
+                    {
+                        // No state file — reset all generation settings
+                        _isRestoringState = true;
+                        Parts.Clear();
+                        IsCategoryLocked = false;
+                        FinalVideoPath = "";
+                        ImagesGenerated = 0;
+                        TotalImages = 0;
+                        PlayingAudioIndex = -1;
+                        CurrentProgress = 0;
+                        StatusMessage = "พร้อมทำงาน";
+                        for (int i = 0; i < StepCompleted.Count; i++)
+                            StepCompleted[i] = false;
+                        CurrentStepIndex = 0;
+                        _isRestoringState = false;
+                        SnackbarQueue.Enqueue($"เปิดโฟลเดอร์ EP{epNum} (ไม่มีข้อมูลบันทึก)");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _isRestoringState = false;
+                    SnackbarQueue.Enqueue($"โหลดข้อมูลล้มเหลว: {ex.Message}");
+                }
+
+                // Update settings
+                _settings.LastEpisodeNumber = EpisodeNumber;
+                _settings.Save();
+            }
+            else
+            {
+                MessageBox.Show("ไม่สามารถอ่านหมายเลข EP จากชื่อโฟลเดอร์ได้", "แจ้งเตือน",
+                    MessageBoxButton.OK, MessageBoxImage.Warning);
+            }
+        }
+        else
+        {
+            MessageBox.Show("กรุณาเลือกโฟลเดอร์ที่ขึ้นต้นด้วย \"EP\" (เช่น EP39 ทำไม...)",
+                "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
     // === AI BGM: Analyze script mood and auto-select BGM ===
@@ -377,7 +491,7 @@ public partial class MultiImageViewModel : ObservableObject
             Parts.Select(p => p.GetFullNarrationText())
                  .Select(t => t.Length > 500 ? t[..500] : t));
 
-        var prompt = PromptTemplates.GetMoodAnalysisPrompt(scriptSummary);
+        var prompt = PromptTemplates.GetMoodAnalysisPrompt(scriptSummary, SelectedCategory);
 
         try
         {
@@ -385,11 +499,11 @@ public partial class MultiImageViewModel : ObservableObject
                 prompt, _settings.ScriptGenerationModel, null, cancellationToken);
 
             var rawMood = mood.Trim().ToLowerInvariant();
-            // Extract keyword even if LLM wraps it in extra text
-            if (rawMood.Contains("upbeat")) mood = "upbeat";
-            else if (rawMood.Contains("gentle")) mood = "gentle";
-            else if (rawMood.Contains("emotional")) mood = "emotional";
-            else mood = "curious";
+            // Extract keyword dynamically from category's mood list
+            var matchedMood = SelectedCategory.MoodDescriptions.Keys
+                .FirstOrDefault(m => rawMood.Contains(m))
+                ?? SelectedCategory.DefaultBgmMood;
+            mood = matchedMood;
 
             var trackPath = BgmLibrary.GetTrackPath(mood);
             if (trackPath != null)
@@ -448,7 +562,7 @@ public partial class MultiImageViewModel : ObservableObject
                 StatusMessage = $"กำลังสร้างบท Part {part}/3...";
                 CurrentProgress = (part - 1) * 33;
 
-                var prompt = PromptTemplates.GetSceneBasedScriptPrompt(TopicText, part, previousPartsJson);
+                var prompt = PromptTemplates.GetSceneBasedScriptPrompt(TopicText, part, previousPartsJson, SelectedCategory);
                 var response = await _openRouterService.GenerateTextAsync(
                     prompt,
                     _settings.ScriptGenerationModel,
@@ -1212,7 +1326,8 @@ public partial class MultiImageViewModel : ObservableObject
 
             var progress = new Progress<int>(p => CurrentProgress = p);
             var audioBytes = await _googleTtsService.GenerateAudioAsync(
-                narration, _settings.TtsVoice, progress, _processingCts.Token);
+                narration, _settings.TtsVoice, progress, _processingCts.Token,
+                SelectedCategory.TtsVoiceInstruction);
 
             cts.Cancel();
 
@@ -1311,7 +1426,8 @@ public partial class MultiImageViewModel : ObservableObject
 
                     CurrentProgress = i * 33;
                     var audioBytes = await _googleTtsService.GenerateAudioAsync(
-                        narration, _settings.TtsVoice, null, _processingCts.Token);
+                        narration, _settings.TtsVoice, null, _processingCts.Token,
+                        SelectedCategory.TtsVoiceInstruction);
 
                     cts.Cancel();
 
@@ -2040,6 +2156,7 @@ public partial class MultiImageViewModel : ObservableObject
 
     private bool _isLoadingModels; // prevent model switch during initial load
     private bool _isRestoringState; // prevent settings save during state restoration
+    private bool _categorySetByMainWindow; // track if category was explicitly passed from MainWindow
 
     private async Task<bool> EnsureSdRunningAsync(CancellationToken cancellationToken)
     {
@@ -2180,6 +2297,9 @@ public partial class MultiImageViewModel : ObservableObject
         StepCompleted[5] = StepCompleted[4];
         OnPropertyChanged(nameof(StepCompleted));
 
+        // Lock category selection once scripts exist (prevent thematic inconsistency)
+        IsCategoryLocked = Parts.Count > 0 && Parts.Any(p => p.Scenes.Count > 0);
+
         // Auto-save after every step completion
         SaveState();
     }
@@ -2205,7 +2325,8 @@ public partial class MultiImageViewModel : ObservableObject
             SelectedCloudModel = SelectedCloudModel,
             BgmFilePath = BgmFilePath,
             BgmVolume = BgmVolume,
-            BgmEnabled = BgmEnabled
+            BgmEnabled = BgmEnabled,
+            CategoryKey = SelectedCategory.Key
         };
 
         foreach (var part in Parts)
@@ -2308,6 +2429,12 @@ public partial class MultiImageViewModel : ObservableObject
         if (state == null || !state.HasData()) return false;
         if (state.EpisodeNumber != EpisodeNumber) return false;
 
+        RestoreFromState(state);
+        return true;
+    }
+
+    private void RestoreFromState(MultiImageState state)
+    {
         _isRestoringState = true;
         TopicText = state.TopicText;
         CurrentStepIndex = state.CurrentStepIndex;
@@ -2331,10 +2458,20 @@ public partial class MultiImageViewModel : ObservableObject
             ? state.SelectedCloudModel
             : "gemini-2.5-flash-image";
 
+        // Restore category (saved state wins since scripts were generated with it,
+        // but notify user if it differs from MainWindow's selection)
+        var savedCategory = ContentCategoryRegistry.GetByKey(state.CategoryKey);
+        if (_categorySetByMainWindow && savedCategory.Key != SelectedCategory.Key)
+        {
+            SnackbarQueue.Enqueue($"หมวดหมู่ถูกเปลี่ยนเป็น \"{savedCategory.DisplayName}\" ตามโปรเจกต์ที่บันทึกไว้");
+        }
+        SelectedCategory = savedCategory;
+
         // Restore BGM settings
         BgmEnabled = state.BgmEnabled;
         BgmFilePath = state.BgmFilePath ?? "";
         BgmVolume = state.BgmVolume > 0.001 ? state.BgmVolume : 0.25;
+        SyncBgmSelection();
 
         Parts.Clear();
         foreach (var pd in state.Parts)
@@ -2369,9 +2506,11 @@ public partial class MultiImageViewModel : ObservableObject
         OnPropertyChanged(nameof(AllScenes));
         OnPropertyChanged(nameof(StepCompleted));
 
+        // Lock category if scripts exist
+        IsCategoryLocked = Parts.Count > 0 && Parts.Any(p => p.Scenes.Count > 0);
+
         _isRestoringState = false;
         StatusMessage = $"โหลดโปรเจกต์ (บันทึกเมื่อ {state.LastSaved:dd/MM/yyyy HH:mm})";
-        return true;
     }
 
     public void OnWindowClosing()

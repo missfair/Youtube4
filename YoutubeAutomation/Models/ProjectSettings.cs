@@ -37,6 +37,9 @@ public class ProjectSettings
     public string CloudImageModel { get; set; } = "gemini-2.5-flash-image";
     public bool UseCloudImageGen { get; set; } = false;
 
+    // Content Category
+    public string DefaultCategoryKey { get; set; } = "animal";
+
     // BGM (Background Music)
     public string BgmFilePath { get; set; } = "";
     public double BgmVolume { get; set; } = 0.25;

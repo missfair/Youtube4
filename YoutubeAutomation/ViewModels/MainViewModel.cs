@@ -48,6 +48,9 @@ public partial class MainViewModel : ObservableObject
     [ObservableProperty] private bool showSettings;
     [ObservableProperty] private int playingAudioIndex = -1;  // Feature 3
     [ObservableProperty] private string estimatedDuration = "";  // Feature 10
+    [ObservableProperty] private ContentCategory selectedCategory = ContentCategoryRegistry.Animal;
+
+    public ObservableCollection<ContentCategory> AvailableCategories { get; } = new(ContentCategoryRegistry.All);
 
     // Feature 5: Snackbar
     public SnackbarMessageQueue SnackbarQueue { get; } = new(TimeSpan.FromSeconds(2));
@@ -101,6 +104,20 @@ public partial class MainViewModel : ObservableObject
 
         // Load saved project state if exists
         LoadProjectState();
+
+        // Restore category from settings (with guard to prevent premature save)
+        _isInitializing = true;
+        SelectedCategory = ContentCategoryRegistry.GetByKey(_settings.DefaultCategoryKey);
+        _isInitializing = false;
+    }
+
+    private bool _isInitializing;
+
+    partial void OnSelectedCategoryChanged(ContentCategory value)
+    {
+        if (_isInitializing) return;
+        _settings.DefaultCategoryKey = value.Key;
+        _settings.Save();
     }
 
     private void LoadProjectState()
@@ -126,6 +143,14 @@ public partial class MainViewModel : ObservableObject
 
             StatusMessage = $"โหลดโปรเจกต์ล่าสุด (บันทึกเมื่อ {state.LastSaved:dd/MM/yyyy HH:mm})";
         }
+
+        // Always use the highest EP number between state and settings
+        // (MultiImage may have advanced EP via StartNewProject)
+        if (_settings.LastEpisodeNumber > CurrentProject.EpisodeNumber)
+        {
+            CurrentProject.EpisodeNumber = _settings.LastEpisodeNumber;
+            OnPropertyChanged(nameof(CurrentProject));
+        }
     }
 
     public void SaveProjectState()
@@ -142,6 +167,13 @@ public partial class MainViewModel : ObservableObject
             CurrentStepIndex = CurrentStepIndex
         };
         state.Save();
+
+        // Keep settings in sync so MultiImage knows latest EP
+        if (CurrentProject.EpisodeNumber > 0)
+        {
+            _settings.LastEpisodeNumber = CurrentProject.EpisodeNumber;
+            _settings.Save();
+        }
     }
 
     // Browse: Load existing episode folder
@@ -282,7 +314,7 @@ public partial class MainViewModel : ObservableObject
             _processingCts?.Cancel();
             _processingCts = new CancellationTokenSource();
 
-            var prompt = PromptTemplates.GetTopicGenerationPrompt(TopicSubject);
+            var prompt = PromptTemplates.GetTopicGenerationPrompt(TopicSubject, SelectedCategory);
             var progress = new Progress<int>(p => CurrentProgress = p);
 
             var response = await _openRouterService.GenerateTextAsync(
@@ -390,7 +422,7 @@ public partial class MainViewModel : ObservableObject
                 previousParts.Add(ScriptParts[i]);
             }
 
-            var prompt = PromptTemplates.GetScriptGenerationPrompt(topicTitle, partNumber, previousParts);
+            var prompt = PromptTemplates.GetScriptGenerationPrompt(topicTitle, partNumber, previousParts, SelectedCategory);
             var progress = new Progress<int>(p => CurrentProgress = p);
 
             var response = await _openRouterService.GenerateTextAsync(
@@ -470,7 +502,7 @@ public partial class MainViewModel : ObservableObject
                     previousParts.Add(ScriptParts[j]);
                 }
 
-                var prompt = PromptTemplates.GetScriptGenerationPrompt(topicTitle, i, previousParts);
+                var prompt = PromptTemplates.GetScriptGenerationPrompt(topicTitle, i, previousParts, SelectedCategory);
                 var response = await _openRouterService.GenerateTextAsync(
                     prompt,
                     _settings.ScriptGenerationModel,
@@ -519,7 +551,7 @@ public partial class MainViewModel : ObservableObject
             _processingCts?.Cancel();
             _processingCts = new CancellationTokenSource();
 
-            var prompt = PromptTemplates.GetImagePromptGenerationPrompt(topicTitle);
+            var prompt = PromptTemplates.GetImagePromptGenerationPrompt(topicTitle, SelectedCategory);
             var progress = new Progress<int>(p => CurrentProgress = p);
 
             CoverImagePrompt = await _openRouterService.GenerateTextAsync(
@@ -602,7 +634,8 @@ public partial class MainViewModel : ObservableObject
                 CoverImagePrompt = await _openRouterService.GenerateImagePromptAsync(
                     topicTitle,
                     _settings.ImagePromptModel,
-                    _processingCts.Token);
+                    _processingCts.Token,
+                    SelectedCategory);
             }
 
             StatusMessage = "กำลังสร้างรูปปก (อาจใช้เวลาสักครู่)...";
@@ -620,7 +653,8 @@ public partial class MainViewModel : ObservableObject
                 refImagePath,
                 progress,
                 _processingCts.Token,
-                topicTitle);
+                topicTitle,
+                SelectedCategory);
 
             // Save the generated image
             var outputFolder = GetOutputFolder();
@@ -715,7 +749,7 @@ public partial class MainViewModel : ObservableObject
                     previousParts.Add(ScriptParts[j]);
                 }
 
-                var prompt = PromptTemplates.GetScriptGenerationPrompt(topicTitle, i, previousParts);
+                var prompt = PromptTemplates.GetScriptGenerationPrompt(topicTitle, i, previousParts, SelectedCategory);
                 var response = await _openRouterService.GenerateTextAsync(
                     prompt,
                     _settings.ScriptGenerationModel,
@@ -750,7 +784,8 @@ public partial class MainViewModel : ObservableObject
                     CoverImagePrompt = await _openRouterService.GenerateImagePromptAsync(
                         topicTitle,
                         _settings.ImagePromptModel,
-                        _processingCts.Token);
+                        _processingCts.Token,
+                        SelectedCategory);
                 }
 
                 try
@@ -767,7 +802,8 @@ public partial class MainViewModel : ObservableObject
                         refImagePath,
                         null,
                         _processingCts.Token,
-                        topicTitle);
+                        topicTitle,
+                        SelectedCategory);
 
                     var outputFolder = GetOutputFolder();
                     Directory.CreateDirectory(outputFolder);
@@ -830,7 +866,8 @@ public partial class MainViewModel : ObservableObject
                         ScriptParts[partIndex - 1],
                         _settings.TtsVoice,
                         null,
-                        _processingCts.Token);
+                        _processingCts.Token,
+                        SelectedCategory.TtsVoiceInstruction);
 
                     cts.Cancel();
 
@@ -945,7 +982,8 @@ public partial class MainViewModel : ObservableObject
                 ScriptParts[partNumber - 1],
                 _settings.TtsVoice,
                 progress,
-                _processingCts.Token);
+                _processingCts.Token,
+                SelectedCategory.TtsVoiceInstruction);
 
             cts.Cancel(); // Stop the timer
 
@@ -1038,7 +1076,8 @@ public partial class MainViewModel : ObservableObject
                         ScriptParts[partIndex - 1],
                         _settings.TtsVoice,
                         null,
-                        _processingCts.Token);
+                        _processingCts.Token,
+                        SelectedCategory.TtsVoiceInstruction);
 
                     cts.Cancel(); // Stop the timer
 
@@ -1145,7 +1184,8 @@ public partial class MainViewModel : ObservableObject
                             ScriptParts[i - 1],
                             _settings.TtsVoice,
                             null,
-                            _processingCts.Token);
+                            _processingCts.Token,
+                            SelectedCategory.TtsVoiceInstruction);
 
                         cts.Cancel();
 
@@ -1348,12 +1388,14 @@ public partial class MainViewModel : ObservableObject
 
         YoutubeTitle = topicTitle;
 
-        // Base hashtags
-        var baseTags = "#เรื่องแปลกๆ #เรื่องแปลกแต่จริง #เรื่องแปลก #เรื่องแปลกน่ารู้ #วิทยาศาสตร์ #สารคดี #สารคดีวิทยาศาสตร์ #sciencepodcast #ความรู้รอบตัว #เรียนรู้รอบตัว";
+        // Base hashtags from category
+        var baseTags = SelectedCategory.YoutubeHashtags;
 
         // Extract keywords from topic for extra tags
-        var keywords = topicTitle
-            .Replace("ทำไม", "").Replace("?", "").Replace("ถึง", "")
+        var cleanTitle = topicTitle.Replace("?", "");
+        foreach (var word in SelectedCategory.TopicStripWords)
+            cleanTitle = cleanTitle.Replace(word, "");
+        var keywords = cleanTitle
             .Split(' ', StringSplitOptions.RemoveEmptyEntries)
             .Where(w => w.Length > 1)
             .Select(w => $"#{w.Trim()}")
@@ -1412,7 +1454,7 @@ public partial class MainViewModel : ObservableObject
 
         // Import topic from main window if available
         var topic = GetTopicTitle();
-        vm.Initialize(topic, CurrentProject.EpisodeNumber, CoverImagePath);
+        vm.Initialize(topic, CurrentProject.EpisodeNumber, CoverImagePath, SelectedCategory);
 
         window.DataContext = vm;
         window.Owner = Application.Current.MainWindow;

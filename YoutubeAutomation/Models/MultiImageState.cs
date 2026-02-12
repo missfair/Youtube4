@@ -22,6 +22,7 @@ public class MultiImageState
     public string BgmFilePath { get; set; } = "";
     public double BgmVolume { get; set; } = 0.25;
     public bool BgmEnabled { get; set; }
+    public string CategoryKey { get; set; } = "animal";
     public DateTime LastSaved { get; set; }
 
     public class PartData

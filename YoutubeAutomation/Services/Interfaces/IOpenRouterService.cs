@@ -1,3 +1,5 @@
+using YoutubeAutomation.Models;
+
 namespace YoutubeAutomation.Services.Interfaces;
 
 public interface IOpenRouterService
@@ -11,7 +13,8 @@ public interface IOpenRouterService
     Task<string> GenerateImagePromptAsync(
         string topic,
         string model,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        ContentCategory? category = null);
 
     Task<byte[]> GenerateImageAsync(
         string prompt,
@@ -19,7 +22,8 @@ public interface IOpenRouterService
         string? referenceImagePath = null,
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default,
-        string? topicTitle = null);
+        string? topicTitle = null,
+        ContentCategory? category = null);
 
     Task<byte[]> GenerateSceneImageFromCloudAsync(
         string prompt,

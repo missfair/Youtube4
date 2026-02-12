@@ -390,6 +390,20 @@
                         <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=0}">
                             <TextBlock Text="Step 1: สร้างหัวข้อวิดีโอ" Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,16"/>
 
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <materialDesign:PackIcon Kind="Shape" Width="20" Height="20"
+                                                         VerticalAlignment="Center" Margin="0,0,8,0"
+                                                         Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                                <TextBlock Text="หมวดหมู่:" FontWeight="Bold" FontSize="14"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <ComboBox ItemsSource="{Binding AvailableCategories}"
+                                          SelectedItem="{Binding SelectedCategory}"
+                                          DisplayMemberPath="DisplayName"
+                                          Width="250" FontSize="13"
+                                          materialDesign:HintAssist.Hint="เลือกหมวดหมู่..."
+                                          IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"/>
+                            </StackPanel>
+
                             <TextBlock Text="ใส่หัวข้อที่ต้องการ (เช่น กุ้งลอบสเตอร์, หมีน้ำ, Area 51)" Margin="0,0,0,8"/>
                             <Grid>
                                 <Grid.ColumnDefinitions>

@@ -51,7 +51,7 @@ Color Palette: Muted colors (สีเหลืองทราย, เขีย�
 | 4. สร้างเสียง | เอาบทไป Google TTS เอง | **อัตโนมัติ** |
 | 5. รวมเป็นวิดีโอ | เปิด editor ตัดต่อเอง | **อัตโนมัติ** (FFmpeg) |
 | 6. **Multi-Image** | ต้องทำภาพหลายภาพเอง | **อัตโนมัติ** (SD Local / Cloud + FFmpeg 2-pass) |
-| 7. **BGM** | หา BGM + ปรับเสียงเอง | **อัตโนมัติ** (8 built-in tracks + AI mood analysis) |
+| 7. **BGM** | หา BGM + ปรับเสียงเอง | **อัตโนมัติ** (16 built-in tracks + AI mood analysis) |
 
 **ผลลัพธ์:** จาก ~2-3 ชั่วโมงต่อ Episode เหลือกด "Run All Flow" รอ ~10-15 นาที ได้วิดีโอพร้อม upload
 
@@ -80,9 +80,11 @@ YoutubeAutomation/
     │   ├── ProjectSettings.cs        # Configuration (API keys, paths, SD settings)
     │   ├── ProjectState.cs           # Workflow state persistence
     │   ├── MultiImageState.cs        # Multi-Image state persistence
+    │   ├── ContentCategory.cs        # Per-category config (prompts, TTS tone, image style, BGM)
+    │   ├── ContentCategoryRegistry.cs # Static registry (4 active + 4 future categories)
     │   ├── SceneData.cs              # Scene + ScenePart models
     │   ├── WorkflowStep.cs           # Step status tracking
-    │   ├── BgmLibrary.cs             # Built-in BGM library (8 tracks)
+    │   ├── BgmLibrary.cs             # Built-in BGM library (16 tracks, 8 moods × 2)
     │   ├── BgmOptions.cs             # BGM configuration (volume, fade in/out)
     │   └── BgmTrackDisplayItem.cs    # UI display wrapper for BGM dropdown
     ├── Services/
@@ -102,7 +104,7 @@ YoutubeAutomation/
     │   ├── MainViewModel.cs          # Main flow logic
     │   └── MultiImageViewModel.cs    # Multi-image flow logic
     └── Prompts/
-        └── PromptTemplates.cs        # AI prompt templates
+        └── PromptTemplates.cs        # AI prompt templates (category-aware)
 ```
 
 ### Dependencies (NuGet Packages)
@@ -194,6 +196,8 @@ Input: หัวข้อ + ภาพปก
 | Image Prompt | `google/gemini-2.5-flash` | สร้าง English prompt |
 | Image Generation | `google/gemini-2.0-flash-exp:free` | สร้างรูปปก (Main flow) |
 
+**Category-aware:** ทุก function รับ `category` parameter เพื่อปรับ prompt ตามหมวดเนื้อหา (animal, body, history, space)
+
 **แนะนำ:** สำหรับภาพปก ใช้ **Google Imagen** ผ่าน Gemini API จะได้ภาพที่สวยที่สุด (ราคา $0.02-0.06/ภาพ)
 
 **Authentication:** Bearer Token (OpenRouter API Key)
@@ -210,6 +214,7 @@ Input: หัวข้อ + ภาพปก
 | Output | WAV (16-bit PCM) |
 
 **Available Voices:** charon, kore, fenrir, aoede, puck, zephyr, orus, leda
+**Category-aware:** รับ `ttsInstruction` parameter เพื่อปรับน้ำเสียงตามหมวดเนื้อหา
 
 **Get API Key:** Google Cloud Console → Enable "Generative Language API"
 
@@ -264,7 +269,9 @@ Features:
 
 Multi-Image mode รองรับ **เพลงประกอบอัตโนมัติ** พร้อม audio ducking
 
-### Built-in Library (8 tracks)
+### Built-in Library (16 tracks — 8 moods × 2 variants)
+
+**Original 8 tracks:**
 | Track | Mood | ใช้กับเนื้อหาแบบ |
 |-------|------|------------------|
 | `curious-discover.mp3` | Curious | สำรวจ ค้นพบ |
@@ -276,6 +283,18 @@ Multi-Image mode รองรับ **เพลงประกอบอัตโ
 | `emotional-heartfelt.mp3` | Emotional | ซาบซึ้ง |
 | `emotional-warm.mp3` | Emotional | อบอุ่น |
 
+**เพิ่มใหม่ 8 tracks (Session 6):**
+| Track | Mood | ใช้กับเนื้อหาแบบ |
+|-------|------|------------------|
+| `mysterious-suspense.mp3` | Mysterious | ตื่นเต้น ลึกลับ |
+| `mysterious-wonder.mp3` | Mysterious | น่าพิศวง |
+| `dramatic-tension.mp3` | Dramatic | ตึงเครียด |
+| `dramatic-cinematic.mp3` | Dramatic | ภาพยนตร์ สมจริง |
+| `epic-grandeur.mp3` | Epic | ยิ่งใหญ่ อลังการ |
+| `epic-cosmic.mp3` | Epic | จักรวาล อวกาศ |
+| `playful-bounce.mp3` | Playful | สนุกสนาน |
+| `playful-quirky.mp3` | Playful | แปลกๆ น่ารัก |
+
 **ที่เก็บ:** `%APPDATA%\YoutubeAutomation\bgm\`
 
 ### Features
@@ -286,6 +305,36 @@ Multi-Image mode รองรับ **เพลงประกอบอัตโ
 - **Audio Ducking** — ลดเสียง BGM อัตโนมัติขณะมีเสียงบรรยาย
 - **Auto-loop** — BGM วนซ้ำจนจบวิดีโอ
 - **Preview** — ฟังตัวอย่าง BGM ก่อนใช้ได้
+
+---
+
+## Content Categories (หมวดเนื้อหา)
+
+โปรแกรมรองรับ **ระบบหมวดเนื้อหา** ที่ปรับ prompt, เสียง, สไตล์ภาพ, BGM และ hashtags ให้เหมาะกับแต่ละประเภทเนื้อหาอัตโนมัติ
+
+### 4 หมวดที่ใช้งานได้
+| Key | ชื่อ | เนื้อหา | BGM Default |
+|-----|------|---------|-------------|
+| `animal` | สัตว์โลกแปลก | สัตว์ลึกลับ พฤติกรรมแปลก | Curious |
+| `body` | ร่างกาย | ความลับของร่างกายมนุษย์ | Curious |
+| `history` | ประวัติศาสตร์ | เหตุการณ์ลึกลับในอดีต | Mysterious |
+| `space` | อวกาศ | ดาราศาสตร์ จักรวาลวิทยา | Epic |
+
+### 4 หมวดสำรอง (รอเปิดใช้)
+`food` (อาหาร), `tech` (เทคโนโลยี), `psychology` (จิตวิทยา), `nature` (ธรรมชาติ)
+
+### สิ่งที่แต่ละหมวดกำหนด
+- **Topic Generation** — กฎการตั้งหัวข้อ, ตัวอย่างดี/ไม่ดี
+- **Script Tone** — น้ำเสียงบทพูด, โครงสร้างเนื้อหา
+- **TTS Voice Instruction** — คำแนะนำน้ำเสียงสำหรับ Google TTS
+- **Image Style** — สไตล์ภาพ, สี, เทคนิค (แยก SD Local / Cloud)
+- **BGM Mood** — อารมณ์เพลงประกอบเริ่มต้น + คำอธิบายแต่ละ mood
+- **YouTube Info** — hashtags, คำที่ต้องตัดออกจากหัวข้อ
+
+### Architecture
+- `ContentCategory` — model เก็บ config ทั้งหมดของแต่ละหมวด
+- `ContentCategoryRegistry` — static registry, `GetByKey(null)` → fallback เป็น Animal (backward compatible)
+- หมวดจะถูกเก็บใน `MultiImageState.CategoryKey` และ `ProjectSettings.DefaultCategoryKey`
 
 ---
 
@@ -381,6 +430,7 @@ Settings จะถูกบันทึกที่:
 | `BgmEnabled` | `false` | เปิดใช้เพลงประกอบ |
 | `BgmFilePath` | `""` | Path to BGM file |
 | `BgmVolume` | `0.25` | BGM volume (0.0-1.0) |
+| `DefaultCategoryKey` | `"animal"` | หมวดเนื้อหาเริ่มต้น (animal/body/history/space) |
 
 ---
 
@@ -446,14 +496,16 @@ Logs จะบันทึก:
 |----------|------|-------------|
 | 1 | `ViewModels/MainViewModel.cs` | Main flow logic - 7-step wizard |
 | 2 | `ViewModels/MultiImageViewModel.cs` | Multi-image flow - parallel pipeline |
-| 3 | `Prompts/PromptTemplates.cs` | AI prompts (ปรับ output quality ที่นี่) |
+| 3 | `Prompts/PromptTemplates.cs` | AI prompts — category-aware (ปรับ output quality ที่นี่) |
 | 4 | `Services/OpenRouterService.cs` | OpenRouter API - text/image generation |
 | 5 | `Services/GoogleTtsService.cs` | TTS API - PCM to WAV conversion |
 | 6 | `Services/FfmpegService.cs` | Video encoding (single + multi-image) |
 | 7 | `Services/StableDiffusionService.cs` | SD Forge API (auto-detect, retry, fallback) |
 | 8 | `Services/AppLogger.cs` | File-based logging |
 | 9 | `Models/ProjectSettings.cs` | Configuration model |
-| 10 | `Models/BgmLibrary.cs` | Built-in BGM library (8 tracks + mood mapping) |
+| 10 | `Models/BgmLibrary.cs` | Built-in BGM library (16 tracks, 8 moods × 2) |
+| 11 | `Models/ContentCategory.cs` | Per-category config (prompts, TTS, image, BGM, hashtags) |
+| 12 | `Models/ContentCategoryRegistry.cs` | Static registry (4 active + 4 future categories) |
 
 ### Important Patterns
 - `[ObservableProperty]` generates `OnXxxChanged` partial methods via source gen
@@ -465,6 +517,8 @@ Logs จะบันทึก:
 - Cross-cancel via `ContinueWith(OnlyOnFaulted)` — if either task fails, cancel the other
 - `_isRunAll` flag controls CTS ownership and MessageBox suppression in pipeline mode
 - SD image gen uses `SemaphoreSlim(1)` to prevent VRAM overflow
+- `_isRestoringState = true` guard when setting SelectedCategory programmatically (prevent re-triggering logic)
+- `ObservableCollection.Clear()` triggers ComboBox `SelectedItem=null` → use `_isLoadingModels` guard
 
 ### Multi-Image Pipeline Flow
 ```

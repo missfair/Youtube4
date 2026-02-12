@@ -25,15 +25,18 @@ public class GoogleTtsService : IGoogleTtsService
         string text,
         string voiceName,
         IProgress<int>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? ttsInstruction = null)
     {
         progress?.Report(10);
 
         var model = _settings.TtsModel;
         var url = $"{BaseUrl}/{model}:generateContent?key={_settings.GoogleApiKey}";
 
-        // Format text for TTS
-        var formattedText = $"Read aloud in a friendly, educational, and engaging tone. Like a fun documentary narrator.\n\nSpeaker 1: {text}";
+        // Format text for TTS (use custom instruction or default)
+        var instruction = ttsInstruction
+            ?? "Read aloud in a friendly, educational, and engaging tone. Like a fun documentary narrator.";
+        var formattedText = $"{instruction}\n\nSpeaker 1: {text}";
 
         var request = new
         {

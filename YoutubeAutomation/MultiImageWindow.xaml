@@ -62,16 +62,26 @@
                     </Border>
                 </StackPanel>
 
-                <!-- New Project button -->
-                <Button HorizontalAlignment="Right" VerticalAlignment="Center"
-                        Command="{Binding StartNewProjectCommand}"
-                        Style="{StaticResource MaterialDesignOutlinedButton}"
-                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
-                    <StackPanel Orientation="Horizontal">
-                        <materialDesign:PackIcon Kind="Plus" VerticalAlignment="Center"/>
-                        <TextBlock Text="โปรเจคใหม่" Margin="4,0,0,0"/>
-                    </StackPanel>
-                </Button>
+                <!-- Load EP / New Project buttons -->
+                <StackPanel HorizontalAlignment="Right" VerticalAlignment="Center" Orientation="Horizontal">
+                    <Button Command="{Binding LoadEpisodeFolderCommand}"
+                            Style="{StaticResource MaterialDesignOutlinedButton}"
+                            IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}"
+                            Margin="0,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon Kind="FolderOpen" VerticalAlignment="Center"/>
+                            <TextBlock Text="โหลด EP" Margin="4,0,0,0"/>
+                        </StackPanel>
+                    </Button>
+                    <Button Command="{Binding StartNewProjectCommand}"
+                            Style="{StaticResource MaterialDesignOutlinedButton}"
+                            IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon Kind="Plus" VerticalAlignment="Center"/>
+                            <TextBlock Text="โปรเจคใหม่" Margin="4,0,0,0"/>
+                        </StackPanel>
+                    </Button>
+                </StackPanel>
             </Grid>
         </materialDesign:Card>
 
@@ -207,6 +217,32 @@
                         <!-- Step 0: Script Generation -->
                         <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=0}">
                             <TextBlock Text="Step 1: สร้างบทแบบ Scene" Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,16"/>
+
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,12">
+                                <materialDesign:PackIcon Kind="Shape" Width="20" Height="20"
+                                                         VerticalAlignment="Center" Margin="0,0,8,0"
+                                                         Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                                <TextBlock Text="หมวดหมู่:" FontWeight="Bold" FontSize="14"
+                                           VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                <ComboBox ItemsSource="{Binding AvailableCategories}"
+                                          SelectedItem="{Binding SelectedCategory}"
+                                          DisplayMemberPath="DisplayName"
+                                          Width="250" FontSize="13"
+                                          materialDesign:HintAssist.Hint="เลือกหมวดหมู่...">
+                                    <ComboBox.Style>
+                                        <Style TargetType="ComboBox" BasedOn="{StaticResource {x:Type ComboBox}}">
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsProcessing}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                                <DataTrigger Binding="{Binding IsCategoryLocked}" Value="True">
+                                                    <Setter Property="IsEnabled" Value="False"/>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </ComboBox.Style>
+                                </ComboBox>
+                            </StackPanel>
 
                             <TextBlock Text="หัวข้อเรื่อง:" Margin="0,0,0,8"/>
                             <Grid>

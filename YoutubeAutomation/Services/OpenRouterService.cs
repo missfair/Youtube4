@@ -73,14 +73,16 @@ public class OpenRouterService : IOpenRouterService
     public async Task<string> GenerateImagePromptAsync(
         string topic,
         string model,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        ContentCategory? category = null)
     {
+        var cat = category ?? ContentCategoryRegistry.Animal;
         var prompt = $@"สร้าง prompt ภาษาอังกฤษสำหรับสร้างรูปปก YouTube video ในหัวข้อ: {topic}
 
 รูปแบบที่ต้องการ:
-- Style: Vintage scientific illustration, 19th-century etching style
-- Technique: Bold black outlines, halftone dot shading, aged paper texture
-- Color Palette: Muted and limited colors (สีเหลืองทราย, เขียวตุ่น, ฟ้าหม่น)
+- Style: {cat.CloudImageStyleDescription}
+- Technique: {cat.CoverImageTechnique}
+- Color Palette: {cat.CloudImageColorPalette}
 - Composition: ฉากกว้างที่เป็นองค์ประกอบของเรื่อง
 
 ตอบเป็น prompt ภาษาอังกฤษเท่านั้น ไม่ต้องมีคำอธิบายอื่น";
@@ -101,7 +103,8 @@ IMPORTANT: The image MUST include the Thai text ""{topic}"" displayed prominentl
         string? referenceImagePath = null,
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default,
-        string? topicTitle = null)
+        string? topicTitle = null,
+        ContentCategory? category = null)
     {
         progress?.Report(10);
 
@@ -140,10 +143,11 @@ The text should be large, bold, and clearly readable.
 Place the text in the upper portion or center of the image.
 Use a style that matches the vintage aesthetic - perhaps on a banner, scroll, or aged paper overlay.";
 
+        var cat = category ?? ContentCategoryRegistry.Animal;
         var fullPrompt = $@"Generate a YouTube thumbnail image with the following requirements:
 
-Style: Vintage scientific illustration, 19th-century etching style with bold black outlines, halftone dot shading, and aged paper texture.
-Color Palette: Muted and limited colors - sandy yellow, muted green, faded blue, sepia tones.
+Style: {cat.CloudImageStyleDescription} with {cat.CoverImageTechnique.ToLower()}.
+Color Palette: {cat.CloudImageColorPalette}.
 Composition: Wide scene showing the main subject.
 Aspect Ratio: 16:9 (landscape)
 

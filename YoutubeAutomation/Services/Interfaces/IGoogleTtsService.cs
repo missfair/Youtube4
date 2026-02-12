@@ -6,7 +6,8 @@ public interface IGoogleTtsService
         string text,
         string voiceName,
         IProgress<int>? progress = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        string? ttsInstruction = null);
 
     Task<byte[]> GenerateImageAsync(
         string prompt,

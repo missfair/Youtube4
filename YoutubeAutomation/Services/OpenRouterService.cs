@@ -19,6 +19,7 @@ public class OpenRouterService : IOpenRouterService
     {
         _settings = settings;
         _httpClient = new HttpClient();
+        _httpClient.Timeout = TimeSpan.FromMinutes(3);
         _httpClient.DefaultRequestHeaders.Add("HTTP-Referer", "https://youtube-automation.local");
         _httpClient.DefaultRequestHeaders.Add("X-Title", "YouTube Automation");
     }
@@ -245,6 +246,120 @@ Subject: {prompt}
 
         progress?.Report(100);
         return Convert.FromBase64String(base64Data);
+    }
+
+    public async Task<byte[]> GenerateSceneImageFromCloudAsync(
+        string prompt,
+        string model,
+        string? referenceImagePath = null,
+        string aspectRatio = "16:9",
+        IProgress<int>? progress = null,
+        CancellationToken cancellationToken = default)
+    {
+        progress?.Report(10);
+
+        var contentParts = new List<object>();
+
+        // Add reference image if provided (for scene chaining)
+        if (!string.IsNullOrEmpty(referenceImagePath) && File.Exists(referenceImagePath))
+        {
+            var imageBytes = await File.ReadAllBytesAsync(referenceImagePath, cancellationToken);
+            var base64Image = Convert.ToBase64String(imageBytes);
+            var mimeType = Path.GetExtension(referenceImagePath).ToLower() switch
+            {
+                ".png" => "image/png",
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".webp" => "image/webp",
+                _ => "image/png"
+            };
+
+            contentParts.Add(new
+            {
+                type = "image_url",
+                image_url = new { url = $"data:{mimeType};base64,{base64Image}" }
+            });
+        }
+
+        // Add text prompt directly (no style wrapping — cloud model handles style from prompt)
+        contentParts.Add(new { type = "text", text = prompt });
+
+        var request = new
+        {
+            model = model,
+            messages = new[]
+            {
+                new { role = "user", content = contentParts }
+            },
+            modalities = new[] { "image", "text" },
+            image_config = new { aspect_ratio = aspectRatio },
+            max_tokens = 4096
+        };
+
+        var json = JsonConvert.SerializeObject(request);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        using var requestMessage = new HttpRequestMessage(HttpMethod.Post, BaseUrl);
+        requestMessage.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _settings.OpenRouterApiKey);
+        requestMessage.Content = content;
+
+        progress?.Report(30);
+
+        var response = await _httpClient.SendAsync(requestMessage, cancellationToken);
+        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+            throw new Exception($"OpenRouter Cloud Image error: {response.StatusCode} - {responseContent}");
+
+        progress?.Report(70);
+
+        var result = JObject.Parse(responseContent);
+
+        // Strategy 1: images array (OpenRouter documented format)
+        var imagesArray = result["choices"]?[0]?["message"]?["images"] as JArray;
+        if (imagesArray != null && imagesArray.Count > 0)
+        {
+            var imageUrl = imagesArray[0]?["image_url"]?["url"]?.ToString();
+            if (!string.IsNullOrEmpty(imageUrl))
+            {
+                var match = System.Text.RegularExpressions.Regex.Match(imageUrl, @"base64,([A-Za-z0-9+/=]+)");
+                if (match.Success)
+                {
+                    progress?.Report(100);
+                    return Convert.FromBase64String(match.Groups[1].Value);
+                }
+                // If it's a URL instead of base64
+                if (imageUrl.StartsWith("http"))
+                {
+                    var imgResponse = await _httpClient.GetAsync(imageUrl, cancellationToken);
+                    progress?.Report(100);
+                    return await imgResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+                }
+            }
+        }
+
+        // Strategy 2: inline base64 in text content
+        var textContent = result["choices"]?[0]?["message"]?["content"]?.ToString() ?? "";
+        if (textContent.Contains("base64"))
+        {
+            var match = System.Text.RegularExpressions.Regex.Match(textContent, @"data:image/[^;]+;base64,([A-Za-z0-9+/=]+)");
+            if (match.Success)
+            {
+                progress?.Report(100);
+                return Convert.FromBase64String(match.Groups[1].Value);
+            }
+        }
+
+        // Strategy 3: direct URL
+        if (!string.IsNullOrEmpty(textContent) && textContent.StartsWith("http"))
+        {
+            var imgResponse = await _httpClient.GetAsync(textContent, cancellationToken);
+            progress?.Report(100);
+            return await imgResponse.Content.ReadAsByteArrayAsync(cancellationToken);
+        }
+
+        throw new Exception(
+            $"No image data in OpenRouter response. Model '{model}' may not support image generation.\n\n" +
+            $"Response: {responseContent[..Math.Min(500, responseContent.Length)]}");
     }
 
     public async Task<bool> TestConnectionAsync(string apiKey)

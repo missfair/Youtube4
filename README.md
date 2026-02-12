@@ -6,7 +6,8 @@
 
 โปรแกรมมี 2 โหมด:
 - **Main Flow** - วิดีโอภาพปกเดียว (ภาพนิ่ง + เสียง)
-- **Multi-Image Flow** - วิดีโอหลายภาพ เปลี่ยนตาม scene พร้อม Ken Burns Effect + Crossfade (ใช้ Stable Diffusion Local ฟรี)
+- **Multi-Image Flow** - วิดีโอหลายภาพ เปลี่ยนตาม scene พร้อม Ken Burns Effect + Crossfade + BGM
+  - เลือกใช้ **SD Forge Local** (ฟรี) หรือ **Google Gemini Cloud** (ไม่ต้องติดตั้ง SD)
 
 ---
 
@@ -49,7 +50,8 @@ Color Palette: Muted colors (สีเหลืองทราย, เขีย�
 | 3. สร้างรูปปก | Copy prompt + generate เอง | กดปุ่มเดียว |
 | 4. สร้างเสียง | เอาบทไป Google TTS เอง | **อัตโนมัติ** |
 | 5. รวมเป็นวิดีโอ | เปิด editor ตัดต่อเอง | **อัตโนมัติ** (FFmpeg) |
-| 6. **Multi-Image** | ต้องทำภาพหลายภาพเอง | **อัตโนมัติ** (SD Local + FFmpeg 2-pass) |
+| 6. **Multi-Image** | ต้องทำภาพหลายภาพเอง | **อัตโนมัติ** (SD Local / Cloud + FFmpeg 2-pass) |
+| 7. **BGM** | หา BGM + ปรับเสียงเอง | **อัตโนมัติ** (8 built-in tracks + AI mood analysis) |
 
 **ผลลัพธ์:** จาก ~2-3 ชั่วโมงต่อ Episode เหลือกด "Run All Flow" รอ ~10-15 นาที ได้วิดีโอพร้อม upload
 
@@ -79,7 +81,10 @@ YoutubeAutomation/
     │   ├── ProjectState.cs           # Workflow state persistence
     │   ├── MultiImageState.cs        # Multi-Image state persistence
     │   ├── SceneData.cs              # Scene + ScenePart models
-    │   └── WorkflowStep.cs           # Step status tracking
+    │   ├── WorkflowStep.cs           # Step status tracking
+    │   ├── BgmLibrary.cs             # Built-in BGM library (8 tracks)
+    │   ├── BgmOptions.cs             # BGM configuration (volume, fade in/out)
+    │   └── BgmTrackDisplayItem.cs    # UI display wrapper for BGM dropdown
     ├── Services/
     │   ├── Interfaces/
     │   │   ├── IOpenRouterService.cs
@@ -143,7 +148,7 @@ Input: หัวข้อ
 [Step 7] YouTube Info ──► Title, Description, Tags
 ```
 
-### Mode 2: Multi-Image Flow (หลายภาพ + transitions) — 6 Steps
+### Mode 2: Multi-Image Flow (หลายภาพ + transitions + BGM) — 6 Steps
 
 ```
 Input: หัวข้อ + ภาพปก
@@ -155,18 +160,20 @@ Input: หัวข้อ + ภาพปก
    ▼
 [Step 2] ตรวจ/แก้ไข ──► แก้บทพูด + image prompt ต่อ scene ได้
    │
-   ▼                      ┌──────────────────────────────┐
-[Step 3] สร้างภาพ+เสียง ──►│ ภาพ (SD Local)  ←──parallel──►  เสียง (Google TTS) │
-                           └──────────────────────────────┘
+   ▼                      ┌─────────────────────────────────────────────┐
+[Step 3] สร้างภาพ+เสียง ──►│ ภาพ (SD Local / Cloud)  ←─parallel─►  เสียง (Google TTS) │
+                           └─────────────────────────────────────────────┘
+                           Image Generation:
+                           - SD Local: SD Forge (ฟรี, ต้องมี GPU)
+                           - Cloud: Google Gemini (ไม่ต้อง GPU, มีค่าใช้จ่าย)
                            - Scene 1 ใช้ภาพปกอัตโนมัติ (ไม่ gen ใหม่)
-                           - Scene 2+ gen ด้วย SD Forge
                            - รองรับ Scene Chaining (img2img ต่อเนื่อง)
-                           - Auto-detect SD Forge port
    │
    ▼
 [Step 4] สร้างวิดีโอ ──► FFmpeg 2-Pass:
                           Pass 1: zoompan clip ต่อภาพ (Ken Burns)
-                          Pass 2: xfade รวมทั้งหมด + audio → MP4
+                          Pass 2: xfade รวมทั้งหมด + audio + BGM → MP4
+                          BGM: auto-loop + fade in/out + audio ducking
    │
    ▼
 [Step 5] เสร็จ ──► เปิดโฟลเดอร์ / เปิดวิดีโอ
@@ -228,7 +235,20 @@ Features:
 - **Retry + Fallback** — retry 5xx errors + fallback จาก img2img ไป txt2img
 - **Consecutive failure abort** — หยุดอัตโนมัติเมื่อ error ติดต่อกัน 3 ครั้ง
 
-### 4. FFmpeg (Local Tool)
+### 4. Cloud Image Generation (Google Gemini)
+**ทางเลือกใหม่** สำหรับ Multi-Image mode — ไม่ต้องติดตั้ง Stable Diffusion
+
+| Setting | Value |
+|---------|-------|
+| Toggle | `UseCloudImageGen` ใน Settings |
+| Default Model | `gemini-2.5-flash-image` |
+| API | Google Generative Language API |
+| Aspect Ratio | 16:9 (landscape) |
+
+**ข้อดี:** ไม่ต้องมี GPU, ไม่ต้องติดตั้ง SD Forge, ภาพคุณภาพสูง
+**ข้อเสีย:** มีค่าใช้จ่ายต่อภาพ (~$0.01-0.03/ภาพ), ต้องใช้ internet
+
+### 5. FFmpeg (Local Tool)
 
 **Multi-Image Flow (2-Pass):**
 1. **Pass 1:** สร้าง zoompan clip ต่อภาพ (Ken Burns effect, สลับ zoom-in/zoom-out)
@@ -240,6 +260,35 @@ Features:
 
 ---
 
+## Background Music (BGM)
+
+Multi-Image mode รองรับ **เพลงประกอบอัตโนมัติ** พร้อม audio ducking
+
+### Built-in Library (8 tracks)
+| Track | Mood | ใช้กับเนื้อหาแบบ |
+|-------|------|------------------|
+| `curious-discover.mp3` | Curious | สำรวจ ค้นพบ |
+| `curious-wonder.mp3` | Curious | น่าสงสัย ลึกลับ |
+| `upbeat-fun.mp3` | Upbeat | สนุก ตลก |
+| `upbeat-lively.mp3` | Upbeat | มีชีวิตชีวา |
+| `gentle-nature.mp3` | Gentle | ธรรมชาติ สงบ |
+| `gentle-soothing.mp3` | Gentle | ผ่อนคลาย |
+| `emotional-heartfelt.mp3` | Emotional | ซาบซึ้ง |
+| `emotional-warm.mp3` | Emotional | อบอุ่น |
+
+**ที่เก็บ:** `%APPDATA%\YoutubeAutomation\bgm\`
+
+### Features
+- **AI Mood Analysis** — วิเคราะห์บทพูดแล้วแนะนำ BGM ที่เหมาะสมอัตโนมัติ
+- **Custom BGM** — browse เลือกไฟล์เพลงของตัวเองได้
+- **Volume Control** — default 0.25 (ปรับได้ 0.0-1.0)
+- **Fade In/Out** — เข้า 3 วินาที / ออก 5 วินาที
+- **Audio Ducking** — ลดเสียง BGM อัตโนมัติขณะมีเสียงบรรยาย
+- **Auto-loop** — BGM วนซ้ำจนจบวิดีโอ
+- **Preview** — ฟังตัวอย่าง BGM ก่อนใช้ได้
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -248,9 +297,10 @@ Features:
 3. **API Keys:**
    - OpenRouter API Key → https://openrouter.ai/keys
    - Google API Key → Google Cloud Console → Enable "Generative Language API"
-4. **(Optional) Stable Diffusion Forge** สำหรับ Multi-Image mode
+4. **(Optional) Stable Diffusion Forge** สำหรับ Multi-Image mode (ภาพฟรี)
    - Download: https://github.com/lllyasviel/stable-diffusion-webui-forge
    - เปิดด้วย `--api` flag
+   - **หรือ** ใช้ Cloud Image Gen (Google Gemini) แทนได้ ไม่ต้องติดตั้ง SD
 
 ### Build & Run
 ```bash
@@ -279,10 +329,18 @@ Settings จะถูกบันทึกที่:
 ```
 
 ### Multi-Image Setup (เพิ่มเติม)
+
+**Option A: ใช้ SD Forge Local (ฟรี, ต้องมี GPU)**
 1. ติดตั้ง Stable Diffusion Forge
 2. เปิด Forge ด้วย `--api` flag
 3. กดปุ่ม **"Multi-Image"** ที่ header ของ MainWindow
 4. โปรแกรม auto-detect port ของ SD Forge อัตโนมัติ (7860-7863)
+
+**Option B: ใช้ Cloud Image Gen (ไม่ต้อง GPU)**
+1. กดปุ่ม **"Multi-Image"** ที่ header ของ MainWindow
+2. เปิด toggle **"Use Cloud Image Gen"**
+3. เลือก Cloud model (default: `gemini-2.5-flash-image`)
+4. ใช้ Google API Key เดียวกับ TTS
 
 **แนะนำสำหรับ GPU 12GB (RTX 3060):**
 - ใช้ `--medvram` flag เพื่อลด VRAM usage
@@ -315,7 +373,14 @@ Settings จะถูกบันทึกที่:
 | `UseGpuEncoding` | `false` | Use NVIDIA NVENC for video encoding |
 | `StableDiffusionUrl` | `http://127.0.0.1:7860` | SD Forge URL (auto-detected) |
 | `StableDiffusionSteps` | `25` | Image generation steps |
+| `StableDiffusionCfgScale` | `8.5` / `6.0` | CFG Scale (auto: SD1.5=8.5, SDXL=6.0) |
+| `StableDiffusionModelName` | `""` | Last used SD checkpoint name |
 | `StableDiffusionBatPath` | `""` | Path to SD Forge .bat for auto-launch |
+| `CloudImageModel` | `gemini-2.5-flash-image` | Cloud image generation model |
+| `UseCloudImageGen` | `false` | ใช้ Cloud (Gemini) แทน SD Local |
+| `BgmEnabled` | `false` | เปิดใช้เพลงประกอบ |
+| `BgmFilePath` | `""` | Path to BGM file |
+| `BgmVolume` | `0.25` | BGM volume (0.0-1.0) |
 
 ---
 
@@ -339,11 +404,11 @@ Settings จะถูกบันทึกที่:
 └── EP[N] [Topic Name]/
     ├── scenes/
     │   ├── scene_000.png   # ภาพปก (copy จาก cover image)
-    │   ├── scene_001.png   # Generated by SD Forge
+    │   ├── scene_001.png   # Generated by SD Forge / Cloud
     │   ├── ...
     │   └── scene_019.png
     ├── ep[N]_1.wav, ep[N]_2.wav, ep[N]_3.wav
-    └── EP[N]_MultiImage.mp4   # 1920x1080 with Ken Burns + crossfade
+    └── EP[N]_MultiImage.mp4   # 1920x1080 with Ken Burns + crossfade + BGM
 ```
 
 ---
@@ -388,6 +453,7 @@ Logs จะบันทึก:
 | 7 | `Services/StableDiffusionService.cs` | SD Forge API (auto-detect, retry, fallback) |
 | 8 | `Services/AppLogger.cs` | File-based logging |
 | 9 | `Models/ProjectSettings.cs` | Configuration model |
+| 10 | `Models/BgmLibrary.cs` | Built-in BGM library (8 tracks + mood mapping) |
 
 ### Important Patterns
 - `[ObservableProperty]` generates `OnXxxChanged` partial methods via source gen
@@ -421,13 +487,13 @@ RunAllAsync
 
 ## Cost Estimate
 
-| รายการ | Main Flow | Multi-Image |
-|--------|-----------|-------------|
-| Script gen (OpenRouter) | ~$0.01 | ~$0.01 |
-| Cover image (Google Imagen) | ~$0.02-0.04 | - |
-| Scene images (SD Local) | - | **$0.00** (ฟรี) |
-| TTS (Google Gemini Pro) | ~$0.05 | ~$0.05 |
-| **รวม** | **~$0.08/EP** | **~$0.06/EP** |
+| รายการ | Main Flow | Multi-Image (SD Local) | Multi-Image (Cloud) |
+|--------|-----------|----------------------|---------------------|
+| Script gen (OpenRouter) | ~$0.01 | ~$0.01 | ~$0.01 |
+| Cover image (Google Imagen) | ~$0.02-0.04 | - | - |
+| Scene images | - | **$0.00** (ฟรี) | ~$0.15-0.45 (15-24 scenes) |
+| TTS (Google Gemini Pro) | ~$0.05 | ~$0.05 | ~$0.05 |
+| **รวม** | **~$0.08/EP** | **~$0.06/EP** | **~$0.21-0.51/EP** |
 
 ### Google Gemini TTS Pricing
 โปรเจคนี้ใช้ `gemini-2.5-pro-preview-tts` เป็น default (คุณภาพสูงสุด):

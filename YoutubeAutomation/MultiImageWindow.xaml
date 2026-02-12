@@ -44,22 +44,35 @@
 
         <!-- Header -->
         <materialDesign:Card Grid.Row="0" Margin="16,16,16,8" Padding="16">
-            <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                <materialDesign:PackIcon Kind="ImageMultiple" Width="32" Height="32"
-                    Foreground="{DynamicResource PrimaryHueMidBrush}" VerticalAlignment="Center"/>
-                <TextBlock Text="Multi-Image Video" Style="{StaticResource MaterialDesignHeadline5TextBlock}"
-                    Margin="12,0,0,0" VerticalAlignment="Center"/>
-                <Border Background="{DynamicResource PrimaryHueLightBrush}" CornerRadius="4"
-                        Padding="8,4" Margin="32,0,0,0" VerticalAlignment="Center">
+            <Grid>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <materialDesign:PackIcon Kind="ImageMultiple" Width="32" Height="32"
+                        Foreground="{DynamicResource PrimaryHueMidBrush}" VerticalAlignment="Center"/>
+                    <TextBlock Text="Multi-Image Video" Style="{StaticResource MaterialDesignHeadline5TextBlock}"
+                        Margin="12,0,0,0" VerticalAlignment="Center"/>
+                    <Border Background="{DynamicResource PrimaryHueLightBrush}" CornerRadius="4"
+                            Padding="8,4" Margin="32,0,0,0" VerticalAlignment="Center">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="EP" FontWeight="Bold" FontSize="18" VerticalAlignment="Center"
+                                       Foreground="{DynamicResource PrimaryHueDarkBrush}"/>
+                            <TextBox Text="{Binding EpisodeNumber, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
+                                     Width="70" FontSize="20" FontWeight="Bold" VerticalAlignment="Center"
+                                     Margin="4,0,0,0" TextAlignment="Center"/>
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+
+                <!-- New Project button -->
+                <Button HorizontalAlignment="Right" VerticalAlignment="Center"
+                        Command="{Binding StartNewProjectCommand}"
+                        Style="{StaticResource MaterialDesignOutlinedButton}"
+                        IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
                     <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="EP" FontWeight="Bold" FontSize="18" VerticalAlignment="Center"
-                                   Foreground="{DynamicResource PrimaryHueDarkBrush}"/>
-                        <TextBox Text="{Binding EpisodeNumber, Mode=TwoWay, UpdateSourceTrigger=PropertyChanged}"
-                                 Width="70" FontSize="20" FontWeight="Bold" VerticalAlignment="Center"
-                                 Margin="4,0,0,0" TextAlignment="Center"/>
+                        <materialDesign:PackIcon Kind="Plus" VerticalAlignment="Center"/>
+                        <TextBlock Text="โปรเจคใหม่" Margin="4,0,0,0"/>
                     </StackPanel>
-                </Border>
-            </StackPanel>
+                </Button>
+            </Grid>
         </materialDesign:Card>
 
         <!-- Step Bar -->
@@ -303,7 +316,55 @@
 
                         <!-- Step 2: Image Generation -->
                         <StackPanel Visibility="{Binding CurrentStepIndex, Converter={StaticResource EqualityToVisibilityConverter}, ConverterParameter=2}">
-                            <TextBlock Text="Step 3: สร้างภาพ (Stable Diffusion)" Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,8"/>
+                            <TextBlock Style="{StaticResource MaterialDesignHeadline6TextBlock}" Margin="0,0,0,8">
+                                <TextBlock.Text>
+                                    <Binding Path="UseCloudImageGen">
+                                        <Binding.Converter>
+                                            <local:BoolToStringConverter TrueValue="Step 3: สร้างภาพ (Cloud - Google Gemini)" FalseValue="Step 3: สร้างภาพ (SD Local)"/>
+                                        </Binding.Converter>
+                                    </Binding>
+                                </TextBlock.Text>
+                            </TextBlock>
+
+                            <!-- Image Provider Toggle -->
+                            <Border BorderBrush="{DynamicResource PrimaryHueMidBrush}" BorderThickness="1"
+                                    CornerRadius="4" Padding="12" Margin="0,0,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                                        <materialDesign:PackIcon Kind="CloudUpload" Width="20" Height="20"
+                                                                 VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock Text="Image Provider:" FontWeight="Bold" FontSize="13" VerticalAlignment="Center"/>
+                                        <ToggleButton IsChecked="{Binding UseCloudImageGen}"
+                                                      Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                                                      Margin="12,0,12,0" VerticalAlignment="Center"/>
+                                        <TextBlock FontSize="13" FontWeight="Bold" VerticalAlignment="Center">
+                                            <TextBlock.Text>
+                                                <Binding Path="UseCloudImageGen">
+                                                    <Binding.Converter>
+                                                        <local:BoolToStringConverter TrueValue="Cloud (Google Gemini)" FalseValue="SD Local"/>
+                                                    </Binding.Converter>
+                                                </Binding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                    </StackPanel>
+
+                                    <!-- Cloud Model Selector -->
+                                    <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                                                Visibility="{Binding UseCloudImageGen, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <TextBlock Text="Model:" FontSize="12" VerticalAlignment="Center" Margin="0,0,4,0"/>
+                                        <ComboBox ItemsSource="{Binding AvailableCloudModels}"
+                                                  SelectedItem="{Binding SelectedCloudModel}"
+                                                  Width="300" FontSize="11" VerticalAlignment="Center"
+                                                  IsEditable="True"
+                                                  materialDesign:HintAssist.Hint="เลือก cloud model..."/>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
 
                             <!-- Reference Image Section -->
                             <Border BorderBrush="{DynamicResource PrimaryHueMidBrush}" BorderThickness="1"
@@ -346,8 +407,9 @@
                                             </Button>
                                         </StackPanel>
 
-                                        <!-- Denoising Strength Slider -->
-                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0">
+                                        <!-- Denoising Strength Slider (SD only) -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,8,0,0"
+                                                    Visibility="{Binding ShowSdControls, Converter={StaticResource BooleanToVisibilityConverter}}">
                                             <TextBlock Text="ความอิสระ:" FontSize="12" VerticalAlignment="Center" Width="70"/>
                                             <Slider Value="{Binding DenoisingStrength}" Minimum="0.3" Maximum="0.95"
                                                     Width="150" TickFrequency="0.05" IsSnapToTickEnabled="True"
@@ -408,9 +470,10 @@
                                     </StackPanel>
                                 </Button>
 
-                                <!-- Style Toggle -->
+                                <!-- Style Toggle (SD only) -->
                                 <Border BorderBrush="Gray" BorderThickness="1" CornerRadius="4"
-                                        Padding="8,4" Margin="16,0,0,0" VerticalAlignment="Center">
+                                        Padding="8,4" Margin="16,0,0,0" VerticalAlignment="Center"
+                                        Visibility="{Binding ShowSdControls, Converter={StaticResource BooleanToVisibilityConverter}}">
                                     <StackPanel Orientation="Horizontal">
                                         <materialDesign:PackIcon Kind="Palette" Width="16" Height="16"
                                                                  VerticalAlignment="Center" Margin="0,0,4,0"/>
@@ -457,8 +520,9 @@
                                 </TextBlock>
                             </StackPanel>
 
-                            <!-- SD Forge Control Panel -->
-                            <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                            <!-- SD Forge Control Panel (SD only) -->
+                            <StackPanel Orientation="Horizontal" Margin="0,0,0,16"
+                                        Visibility="{Binding ShowSdControls, Converter={StaticResource BooleanToVisibilityConverter}}">
                                 <!-- Status Indicator -->
                                 <Ellipse Width="12" Height="12" VerticalAlignment="Center">
                                     <Ellipse.Style>
@@ -784,6 +848,87 @@
                                     </TextBlock>
                                     <TextBlock Text="Ken Burns: zoom in/out สลับ + fade transition 1 วินาที"/>
                                     <TextBlock Text="Output: 1920x1080 (Full HD)"/>
+                                </StackPanel>
+                            </materialDesign:Card>
+
+                            <!-- BGM Settings -->
+                            <materialDesign:Card Padding="16" Margin="0,0,0,16">
+                                <StackPanel>
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <materialDesign:PackIcon Kind="MusicNote" Width="24" Height="24"
+                                            VerticalAlignment="Center" Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                                        <TextBlock Text="เพลงพื้นหลัง (BGM)" FontWeight="Bold" FontSize="14"
+                                                   VerticalAlignment="Center" Margin="8,0,0,0"/>
+                                        <ToggleButton IsChecked="{Binding BgmEnabled}"
+                                                      Style="{StaticResource MaterialDesignSwitchToggleButton}"
+                                                      Margin="16,0,0,0" VerticalAlignment="Center"/>
+                                        <TextBlock FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0" Opacity="0.7">
+                                            <TextBlock.Text>
+                                                <Binding Path="BgmEnabled">
+                                                    <Binding.Converter>
+                                                        <local:BoolToStringConverter TrueValue="เปิด" FalseValue="ปิด"/>
+                                                    </Binding.Converter>
+                                                </Binding>
+                                            </TextBlock.Text>
+                                        </TextBlock>
+                                    </StackPanel>
+
+                                    <!-- Track selection dropdown + preview -->
+                                    <StackPanel Orientation="Horizontal" Margin="0,0,0,8">
+                                        <ComboBox ItemsSource="{Binding BgmTrackItems}"
+                                                  SelectedItem="{Binding SelectedBgmTrack}"
+                                                  DisplayMemberPath="DisplayText"
+                                                  Width="300" FontSize="12"
+                                                  VerticalAlignment="Center"
+                                                  materialDesign:HintAssist.Hint="เลือกเพลง BGM..."/>
+                                        <Button Command="{Binding ToggleBgmPreviewCommand}"
+                                                Style="{StaticResource MaterialDesignIconButton}"
+                                                Width="36" Height="36" Margin="8,0,0,0"
+                                                ToolTip="ฟังตัวอย่าง BGM">
+                                            <materialDesign:PackIcon Width="20" Height="20">
+                                                <materialDesign:PackIcon.Style>
+                                                    <Style TargetType="materialDesign:PackIcon">
+                                                        <Setter Property="Kind" Value="Play"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding IsBgmPreviewPlaying}" Value="True">
+                                                                <Setter Property="Kind" Value="Stop"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </materialDesign:PackIcon.Style>
+                                            </materialDesign:PackIcon>
+                                        </Button>
+                                        <Button Command="{Binding ClearBgmCommand}"
+                                                Style="{StaticResource MaterialDesignIconButton}"
+                                                Width="36" Height="36" Margin="4,0,0,0"
+                                                ToolTip="ล้าง BGM"
+                                                Foreground="OrangeRed">
+                                            <materialDesign:PackIcon Kind="Close" Width="18" Height="18"/>
+                                        </Button>
+                                    </StackPanel>
+
+                                    <!-- Volume slider -->
+                                    <StackPanel Orientation="Horizontal">
+                                        <materialDesign:PackIcon Kind="VolumeHigh" Width="18" Height="18"
+                                                                 VerticalAlignment="Center" Margin="0,0,8,0"/>
+                                        <TextBlock Text="ระดับเสียง BGM:" FontSize="12" VerticalAlignment="Center" Width="100"/>
+                                        <Slider Value="{Binding BgmVolume}" Minimum="0" Maximum="0.5"
+                                                Width="200" TickFrequency="0.05" IsSnapToTickEnabled="True"
+                                                VerticalAlignment="Center"/>
+                                        <TextBlock FontSize="12" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                   Text="{Binding BgmVolume, StringFormat={}{0:P0}}"/>
+                                        <TextBlock FontSize="10" Opacity="0.5" VerticalAlignment="Center" Margin="8,0,0,0"
+                                                   Text="(แนะนำ 15-30%)"/>
+                                    </StackPanel>
+
+                                    <TextBlock FontSize="11" Opacity="0.5" Margin="0,8,0,0"
+                                               Text="BGM จะ loop อัตโนมัติ, fade in 3 วิ / fade out 5 วิ, และลดเสียงเมื่อมีบรรยาย (ducking)"/>
+                                    <TextBlock FontSize="11" Opacity="0.7" Margin="0,4,0,0"
+                                               Foreground="{DynamicResource PrimaryHueMidBrush}"
+                                               Visibility="{Binding BgmEnabled, Converter={StaticResource BooleanToVisibilityConverter}}">
+                                        <Run Text="AI แนะนำ: "/>
+                                        <Run Text="{Binding BgmFileName, Mode=OneWay}"/>
+                                    </TextBlock>
                                 </StackPanel>
                             </materialDesign:Card>
 

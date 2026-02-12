@@ -33,6 +33,15 @@ public class ProjectSettings
     public string StableDiffusionBatPath { get; set; } = ""; // path to run.bat or webui-user.bat
     public string StableDiffusionModelName { get; set; } = ""; // last used model checkpoint
 
+    // Cloud Image Generation (Google Gemini)
+    public string CloudImageModel { get; set; } = "gemini-2.5-flash-image";
+    public bool UseCloudImageGen { get; set; } = false;
+
+    // BGM (Background Music)
+    public string BgmFilePath { get; set; } = "";
+    public double BgmVolume { get; set; } = 0.25;
+    public bool BgmEnabled { get; set; } = false;
+
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "YoutubeAutomation",

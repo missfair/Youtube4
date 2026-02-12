@@ -2,6 +2,8 @@ using System.Collections.ObjectModel;
 using System.IO;
 using System.Text.RegularExpressions;
 using System.Windows;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using MaterialDesignThemes.Wpf;
@@ -21,15 +23,21 @@ public partial class MultiImageViewModel : ObservableObject
     private readonly IGoogleTtsService _googleTtsService;
     private readonly IFfmpegService _ffmpegService;
     private readonly IStableDiffusionService _sdService;
+    private readonly IDocumentService _documentService;
     private readonly ProjectSettings _settings;
 
     private CancellationTokenSource? _processingCts;
     private readonly SemaphoreSlim _sdSemaphore = new(1, 1);
     private bool _isRunAll; // true when RunAll controls the pipeline
 
-    // Audio playback
+    // Audio playback (narration preview)
     private WaveOutEvent? _waveOut;
     private AudioFileReader? _audioFileReader;
+
+    // BGM preview playback (separate from narration)
+    private WaveOutEvent? _bgmPreviewPlayer;
+    private AudioFileReader? _bgmPreviewReader;
+    private bool _isSyncingBgmSelection;
 
     private const string CartoonStylePrefix = "(rich vibrant colors:1.3), comic book art style, bold black outlines, halftone dot shading, aged paper texture, detailed ink illustration, dramatic lighting, masterpiece, best quality, ";
     private const string CartoonNegativePrompt = "text, letters, words, numbers, watermark, signature, logo, photographic, 3d render, anime, blurry, low quality, deformed, disfigured, out of frame, monochrome, grayscale, black and white";
@@ -61,10 +69,27 @@ public partial class MultiImageViewModel : ObservableObject
     [ObservableProperty] private bool useSceneChaining;
     [ObservableProperty] private string selectedModel = "";
     [ObservableProperty] private bool isModelLoading;
+    [ObservableProperty] private bool useCloudImageGen;
+    [ObservableProperty] private string selectedCloudModel = "";
+    [ObservableProperty] private bool bgmEnabled;
+    [ObservableProperty] private string bgmFilePath = "";
+    [ObservableProperty] private double bgmVolume = 0.25;
+    [ObservableProperty] private bool isBgmPreviewPlaying;
+    [ObservableProperty] private BgmTrackDisplayItem? selectedBgmTrack;
+
+    public string BgmFileName => string.IsNullOrWhiteSpace(BgmFilePath)
+        ? "(ไม่ได้เลือก)"
+        : Path.GetFileName(BgmFilePath);
 
     public SnackbarMessageQueue SnackbarQueue { get; } = new(TimeSpan.FromSeconds(2));
     public ObservableCollection<ScenePart> Parts { get; } = new();
+    public ObservableCollection<BgmTrackDisplayItem> BgmTrackItems { get; } = new();
     public ObservableCollection<string> AvailableModels { get; } = new();
+    public ObservableCollection<string> AvailableCloudModels { get; } = new()
+    {
+        "gemini-2.5-flash-image",
+        "gemini-3-pro-image-preview"
+    };
     public ObservableCollection<bool> StepCompleted { get; } = new() { false, false, false, false, false, false };
 
     /// <summary>Detect SDXL/XL model by name keywords.</summary>
@@ -79,17 +104,104 @@ public partial class MultiImageViewModel : ObservableObject
     public int TotalSceneCount => Parts.Sum(p => p.Scenes.Count);
     public List<SceneData> AllScenes => Parts.SelectMany(p => p.Scenes).ToList();
 
+    public bool ShowSdControls => !UseCloudImageGen;
+    public bool ShowCloudControls => UseCloudImageGen;
+
+    partial void OnUseCloudImageGenChanged(bool value)
+    {
+        if (!_isRestoringState)
+        {
+            _settings.UseCloudImageGen = value;
+            _settings.Save();
+        }
+        OnPropertyChanged(nameof(ShowSdControls));
+        OnPropertyChanged(nameof(ShowCloudControls));
+    }
+
+    partial void OnSelectedCloudModelChanged(string value)
+    {
+        if (!_isRestoringState && !string.IsNullOrWhiteSpace(value))
+        {
+            _settings.CloudImageModel = value;
+            _settings.Save();
+        }
+    }
+
+    partial void OnBgmEnabledChanged(bool value)
+    {
+        if (!_isRestoringState)
+        {
+            _settings.BgmEnabled = value;
+            _settings.Save();
+        }
+    }
+
+    partial void OnBgmFilePathChanged(string value)
+    {
+        if (!_isRestoringState)
+        {
+            _settings.BgmFilePath = value ?? "";
+            _settings.Save();
+        }
+        OnPropertyChanged(nameof(BgmFileName));
+    }
+
+    partial void OnBgmVolumeChanged(double value)
+    {
+        if (!_isRestoringState)
+        {
+            _settings.BgmVolume = value;
+            _settings.Save();
+        }
+    }
+
+    partial void OnSelectedBgmTrackChanged(BgmTrackDisplayItem? value)
+    {
+        if (_isSyncingBgmSelection || _isRestoringState || value == null) return;
+
+        if (value.IsCustomBrowse)
+        {
+            // User selected "เลือกไฟล์เอง..." — open file dialog
+            _isSyncingBgmSelection = true;
+            BrowseBgmFile();
+            SyncBgmSelection();
+            _isSyncingBgmSelection = false;
+            return;
+        }
+
+        if (value.Track != null)
+        {
+            var trackPath = BgmLibrary.GetFullPath(value.Track);
+            if (File.Exists(trackPath))
+            {
+                BgmFilePath = trackPath;
+                BgmEnabled = true;
+            }
+            else
+            {
+                SnackbarQueue.Enqueue($"ไม่พบไฟล์: {value.Track.FileName}");
+            }
+        }
+        else if (value.CustomFilePath != null)
+        {
+            BgmFilePath = value.CustomFilePath;
+            BgmEnabled = true;
+        }
+    }
+
     public MultiImageViewModel(
         IOpenRouterService openRouterService,
         IGoogleTtsService googleTtsService,
         IFfmpegService ffmpegService,
         IStableDiffusionService sdService,
+        IDocumentService documentService,
         ProjectSettings settings)
     {
         _openRouterService = openRouterService;
         _googleTtsService = googleTtsService;
         _ffmpegService = ffmpegService;
         _sdService = sdService;
+        _documentService = documentService;
         _settings = settings;
     }
 
@@ -99,7 +211,8 @@ public partial class MultiImageViewModel : ObservableObject
         EpisodeNumber = epNumber;
 
         // Try load saved state for this episode
-        if (TryLoadState())
+        var stateLoaded = TryLoadState();
+        if (stateLoaded)
         {
             UpdateStepCompletion();
             SnackbarQueue.Enqueue("โหลดโปรเจกต์ Multi-Image สำเร็จ");
@@ -108,7 +221,8 @@ public partial class MultiImageViewModel : ObservableObject
         {
             // Fallback: try the last EP number used in MultiImage
             EpisodeNumber = _settings.LastEpisodeNumber;
-            if (TryLoadState())
+            stateLoaded = TryLoadState();
+            if (stateLoaded)
             {
                 UpdateStepCompletion();
                 SnackbarQueue.Enqueue($"โหลดโปรเจกต์ EP{EpisodeNumber} สำเร็จ (จาก session ก่อนหน้า)");
@@ -119,10 +233,188 @@ public partial class MultiImageViewModel : ObservableObject
         if (string.IsNullOrWhiteSpace(ReferenceImagePath)
             && !string.IsNullOrWhiteSpace(coverImagePath) && File.Exists(coverImagePath))
         {
-            ReferenceImagePath = coverImagePath;
+            ReferenceImagePath = CompressImageIfNeeded(coverImagePath, GetScenesFolder());
         }
 
+        // Initialize cloud image gen settings
+        UseCloudImageGen = _settings.UseCloudImageGen;
+        SelectedCloudModel = !string.IsNullOrWhiteSpace(_settings.CloudImageModel)
+            ? _settings.CloudImageModel
+            : "gemini-2.5-flash-image";
+
+        // Initialize BGM from global settings ONLY if no per-project state was loaded
+        if (!stateLoaded)
+        {
+            BgmEnabled = _settings.BgmEnabled;
+            BgmFilePath = _settings.BgmFilePath ?? "";
+            BgmVolume = _settings.BgmVolume > 0.001 ? _settings.BgmVolume : 0.25;
+        }
+
+        PopulateBgmTrackItems();
         UpdateSdStatus();
+    }
+
+    private void PopulateBgmTrackItems()
+    {
+        _isSyncingBgmSelection = true;
+        BgmTrackItems.Clear();
+        foreach (var track in BgmLibrary.Tracks)
+            BgmTrackItems.Add(BgmTrackDisplayItem.FromTrack(track));
+        BgmTrackItems.Add(BgmTrackDisplayItem.BrowseCustom);
+        _isSyncingBgmSelection = false;
+
+        // If BGM is enabled but file no longer exists (e.g. old track names after update), reset
+        if (BgmEnabled && !string.IsNullOrWhiteSpace(BgmFilePath) && !File.Exists(BgmFilePath))
+        {
+            BgmFilePath = "";
+            BgmEnabled = false;
+        }
+
+        // Auto-set default BGM if none selected yet
+        if (string.IsNullOrWhiteSpace(BgmFilePath))
+        {
+            var defaultTrack = BgmLibrary.GetTrackPath("curious");
+            if (defaultTrack != null)
+            {
+                BgmFilePath = defaultTrack;
+                BgmEnabled = true;
+                if (BgmVolume < 0.01) BgmVolume = 0.25;
+            }
+        }
+
+        SyncBgmSelection();
+    }
+
+    private void SyncBgmSelection()
+    {
+        _isSyncingBgmSelection = true;
+        if (string.IsNullOrWhiteSpace(BgmFilePath))
+        {
+            SelectedBgmTrack = null;
+        }
+        else
+        {
+            // Check if it's a built-in track
+            var builtInTrack = BgmLibrary.FindByPath(BgmFilePath);
+            if (builtInTrack != null)
+            {
+                SelectedBgmTrack = BgmTrackItems.FirstOrDefault(i =>
+                    i.Track?.FileName == builtInTrack.FileName);
+            }
+            else if (File.Exists(BgmFilePath))
+            {
+                // Custom file — insert before "เลือกไฟล์เอง..."
+                var existing = BgmTrackItems.FirstOrDefault(i => i.CustomFilePath != null);
+                if (existing != null) BgmTrackItems.Remove(existing);
+
+                var customItem = BgmTrackDisplayItem.FromCustomFile(BgmFilePath);
+                BgmTrackItems.Insert(BgmTrackItems.Count - 1, customItem);
+                SelectedBgmTrack = customItem;
+            }
+        }
+        _isSyncingBgmSelection = false;
+    }
+
+    // === New Project ===
+    [RelayCommand]
+    private void StartNewProject()
+    {
+        if (IsProcessing) return;
+
+        var result = MessageBox.Show(
+            $"ต้องการเริ่มโปรเจคใหม่หรือไม่?\n\n" +
+            $"EP{EpisodeNumber} จะถูกบันทึกไว้ แล้วเริ่ม EP{EpisodeNumber + 1} ใหม่",
+            "โปรเจคใหม่", MessageBoxButton.YesNo, MessageBoxImage.Question);
+
+        if (result != MessageBoxResult.Yes) return;
+
+        // Save current state before clearing
+        SaveState();
+
+        // Stop audio playback
+        StopAudioPlayback();
+
+        // Increment EP
+        EpisodeNumber++;
+
+        // Clear data
+        TopicText = "";
+        Parts.Clear();
+        FinalVideoPath = "";
+        ImagesGenerated = 0;
+        TotalImages = 0;
+        PlayingAudioIndex = -1;
+        CurrentProgress = 0;
+        StatusMessage = "พร้อมทำงาน";
+
+        // Reset step completion
+        for (int i = 0; i < StepCompleted.Count; i++)
+            StepCompleted[i] = false;
+
+        // Reset to step 0
+        CurrentStepIndex = 0;
+
+        // Keep: SelectedModel, ReferenceImagePath, DenoisingStrength, IsRealisticStyle, UseSceneChaining
+
+        // Update settings
+        _settings.LastEpisodeNumber = EpisodeNumber;
+        _settings.Save();
+
+        SnackbarQueue.Enqueue($"เริ่มโปรเจคใหม่ EP{EpisodeNumber}");
+    }
+
+    // === AI BGM: Analyze script mood and auto-select BGM ===
+    private async Task AnalyzeMoodAndSetBgmAsync(CancellationToken cancellationToken)
+    {
+        if (!BgmLibrary.HasAnyTracks()) return;
+
+        // Skip if user has manually set a non-built-in BGM file
+        if (!string.IsNullOrWhiteSpace(BgmFilePath) && File.Exists(BgmFilePath)
+            && !BgmLibrary.IsBuiltInTrack(BgmFilePath))
+            return;
+
+        var scriptSummary = string.Join("\n---\n",
+            Parts.Select(p => p.GetFullNarrationText())
+                 .Select(t => t.Length > 500 ? t[..500] : t));
+
+        var prompt = PromptTemplates.GetMoodAnalysisPrompt(scriptSummary);
+
+        try
+        {
+            var mood = await _openRouterService.GenerateTextAsync(
+                prompt, _settings.ScriptGenerationModel, null, cancellationToken);
+
+            var rawMood = mood.Trim().ToLowerInvariant();
+            // Extract keyword even if LLM wraps it in extra text
+            if (rawMood.Contains("upbeat")) mood = "upbeat";
+            else if (rawMood.Contains("gentle")) mood = "gentle";
+            else if (rawMood.Contains("emotional")) mood = "emotional";
+            else mood = "curious";
+
+            var trackPath = BgmLibrary.GetTrackPath(mood);
+            if (trackPath != null)
+            {
+                BgmFilePath = trackPath;
+                BgmEnabled = true;
+                if (BgmVolume < 0.01) BgmVolume = 0.25;
+                SyncBgmSelection();
+                AppLogger.Log($"AI BGM: mood={mood}, track={Path.GetFileName(trackPath)}");
+                StatusMessage = $"AI เลือก BGM: {mood}";
+            }
+        }
+        catch (OperationCanceledException) { throw; }
+        catch (Exception ex)
+        {
+            AppLogger.LogError(ex, "AI BGM mood analysis failed");
+            var fallback = BgmLibrary.GetTrackPath("curious");
+            if (fallback != null)
+            {
+                BgmFilePath = fallback;
+                BgmEnabled = true;
+                if (BgmVolume < 0.01) BgmVolume = 0.25;
+                SyncBgmSelection();
+            }
+        }
     }
 
     // === Step 0: Generate Scene-Based Script ===
@@ -143,6 +435,7 @@ public partial class MultiImageViewModel : ObservableObject
                 IsProcessing = true;
                 CurrentProgress = 0;
                 _processingCts?.Cancel();
+                _processingCts?.Dispose();
                 _processingCts = new CancellationTokenSource();
             }
 
@@ -186,6 +479,13 @@ public partial class MultiImageViewModel : ObservableObject
             TotalImages = TotalSceneCount;
             OnPropertyChanged(nameof(TotalSceneCount));
             OnPropertyChanged(nameof(AllScenes));
+
+            // Save scripts to .txt and .docx files (like Main Flow)
+            await SaveScriptsToFilesAsync();
+
+            // AI auto-select BGM based on script mood
+            StatusMessage = "AI กำลังวิเคราะห์ mood เพื่อเลือก BGM...";
+            await AnalyzeMoodAndSetBgmAsync(_processingCts!.Token);
 
             StatusMessage = $"สร้างบทสำเร็จ: {TotalSceneCount} scenes (3 Parts)";
             CurrentProgress = 100;
@@ -234,12 +534,20 @@ public partial class MultiImageViewModel : ObservableObject
     }
 
     // === Step 2: Generate Images ===
-    private async Task<byte[]> GenerateSceneImageAsync(string fullPrompt, CancellationToken token)
+    private async Task<byte[]> GenerateSceneImageAsync(string scenePrompt, string? refImagePath, CancellationToken token)
     {
-        if (!string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
+        if (UseCloudImageGen)
+        {
+            return await _googleTtsService.GenerateImageAsync(
+                scenePrompt, SelectedCloudModel, null, "16:9", token);
+        }
+
+        // SD Local
+        var fullPrompt = StylePrefix + scenePrompt;
+        if (!string.IsNullOrWhiteSpace(refImagePath) && File.Exists(refImagePath))
         {
             return await _sdService.GenerateImageWithReferenceAsync(
-                fullPrompt, ReferenceImagePath, DenoisingStrength,
+                fullPrompt, refImagePath, DenoisingStrength,
                 NegativePrompt, ImageWidth, ImageHeight, token);
         }
         return await _sdService.GenerateImageAsync(
@@ -263,11 +571,20 @@ public partial class MultiImageViewModel : ObservableObject
                 IsProcessing = true;
                 CurrentProgress = 0;
                 _processingCts?.Cancel();
+                _processingCts?.Dispose();
                 _processingCts = new CancellationTokenSource();
             }
 
-            // Ensure SD is running (auto-launch if needed)
-            if (!await EnsureSdRunningAsync(_processingCts!.Token)) return;
+            // Pre-check: cloud requires API key
+            if (UseCloudImageGen && string.IsNullOrWhiteSpace(_settings.GoogleApiKey))
+            {
+                MessageBox.Show("กรุณาตั้งค่า Google API Key ก่อนใช้ Cloud Image Gen",
+                    "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // Ensure SD is running (auto-launch if needed) — skip for cloud
+            if (!UseCloudImageGen && !await EnsureSdRunningAsync(_processingCts!.Token)) return;
 
             var outputFolder = GetScenesFolder();
             Directory.CreateDirectory(outputFolder);
@@ -276,7 +593,8 @@ public partial class MultiImageViewModel : ObservableObject
             TotalImages = scenes.Count;
             ImagesGenerated = 0;
 
-            AppLogger.Log($"GenerateAllImages: {scenes.Count} scenes, model={SelectedModel}, chaining={UseSceneChaining}, ref={ReferenceImagePath ?? "none"}, size={ImageWidth}x{ImageHeight}");
+            var provider = UseCloudImageGen ? $"Cloud({SelectedCloudModel})" : $"SD({SelectedModel})";
+            AppLogger.Log($"GenerateAllImages: {scenes.Count} scenes, provider={provider}, chaining={UseSceneChaining}, ref={ReferenceImagePath ?? "none"}");
 
             // Track previous scene's image for chaining mode
             string? previousSceneImagePath = null;
@@ -312,6 +630,22 @@ public partial class MultiImageViewModel : ObservableObject
                     continue;
                 }
 
+                // Last scene uses cover/reference image as bookend
+                if (i == scenes.Count - 1 && scenes.Count > 1 &&
+                    !string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
+                {
+                    StatusMessage = $"ใช้ภาพปกเป็น scene สุดท้าย (bookend)...";
+                    var imagePath = Path.Combine(outputFolder, $"scene_{i:D3}.png");
+                    File.Copy(ReferenceImagePath, imagePath, overwrite: true);
+                    scene.ImagePath = imagePath;
+                    previousSceneImagePath = imagePath;
+                    ImagesGenerated++;
+                    CurrentProgress = (int)(100.0 * (i + 1) / scenes.Count);
+                    OnPropertyChanged(nameof(AllScenes));
+                    AppLogger.Log($"Scene {i + 1}: using cover image as bookend (no generation)");
+                    continue;
+                }
+
                 StatusMessage = UseSceneChaining
                     ? $"กำลังสร้างภาพ {i + 1}/{scenes.Count} (ต่อเนื่องจาก scene ก่อนหน้า)..."
                     : $"กำลังสร้างภาพ {i + 1}/{scenes.Count}...";
@@ -323,21 +657,21 @@ public partial class MultiImageViewModel : ObservableObject
 
                     if (UseSceneChaining && !string.IsNullOrWhiteSpace(previousSceneImagePath) && File.Exists(previousSceneImagePath))
                     {
-                        // Scene Chaining: add consistency keywords to help SD maintain visual continuity
-                        var chainedPrompt = StylePrefix + ChainingConsistencyPrefix + scene.ImagePrompt;
-                        imageBytes = await _sdService.GenerateImageWithReferenceAsync(
-                            chainedPrompt, previousSceneImagePath, DenoisingStrength,
-                            NegativePrompt, ImageWidth, ImageHeight, _processingCts.Token);
+                        // Scene Chaining: use previous scene as reference
+                        var chainPrompt = UseCloudImageGen
+                            ? $"Based on the reference image style, create the next scene: {scene.ImagePrompt}"
+                            : ChainingConsistencyPrefix + scene.ImagePrompt;
+                        imageBytes = await GenerateSceneImageAsync(chainPrompt, previousSceneImagePath, _processingCts.Token);
                     }
                     else
                     {
                         // Normal mode: use cover/reference image or txt2img
-                        var fullPrompt = StylePrefix + scene.ImagePrompt;
-                        imageBytes = await GenerateSceneImageAsync(fullPrompt, _processingCts.Token);
+                        imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, ReferenceImagePath, _processingCts.Token);
                     }
 
                     var imagePath = Path.Combine(outputFolder, $"scene_{i:D3}.png");
                     await File.WriteAllBytesAsync(imagePath, imageBytes, _processingCts.Token);
+                    scene.ImagePath = null; // Force PropertyChanged even if path is same
                     scene.ImagePath = imagePath;
                     previousSceneImagePath = imagePath;
                     ImagesGenerated++;
@@ -415,9 +749,19 @@ public partial class MultiImageViewModel : ObservableObject
             IsProcessing = true;
             CurrentProgress = 0;
             _processingCts?.Cancel();
+            _processingCts?.Dispose();
             _processingCts = new CancellationTokenSource();
 
-            if (!await EnsureSdRunningAsync(_processingCts.Token)) return;
+            // Pre-check: cloud requires API key
+            if (UseCloudImageGen && string.IsNullOrWhiteSpace(_settings.GoogleApiKey))
+            {
+                MessageBox.Show("กรุณาตั้งค่า Google API Key ก่อนใช้ Cloud Image Gen",
+                    "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // Ensure SD is running — skip for cloud
+            if (!UseCloudImageGen && !await EnsureSdRunningAsync(_processingCts.Token)) return;
 
             var outputFolder = GetScenesFolder();
             Directory.CreateDirectory(outputFolder);
@@ -444,6 +788,26 @@ public partial class MultiImageViewModel : ObservableObject
                 }
             }
 
+            // Last scene uses cover/reference image as bookend
+            var lastIdx = scenes.Count - 1;
+            if (scenes.Count > 1
+                && (string.IsNullOrWhiteSpace(scenes[lastIdx].ImagePath) || !File.Exists(scenes[lastIdx].ImagePath))
+                && !string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
+            {
+                try
+                {
+                    var imagePath = Path.Combine(outputFolder, $"scene_{lastIdx:D3}.png");
+                    File.Copy(ReferenceImagePath, imagePath, overwrite: true);
+                    scenes[lastIdx].ImagePath = imagePath;
+                    OnPropertyChanged(nameof(AllScenes));
+                    AppLogger.Log($"Scene {lastIdx + 1}: using cover image as bookend [parallel]");
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.LogError(ex, "Failed to copy cover image for last scene bookend [parallel]");
+                }
+            }
+
             // Count already-generated images
             var alreadyDone = scenes.Count(s => !string.IsNullOrWhiteSpace(s.ImagePath) && File.Exists(s.ImagePath));
             ImagesGenerated = alreadyDone;
@@ -463,11 +827,12 @@ public partial class MultiImageViewModel : ObservableObject
 
             var token = _processingCts.Token;
             var dispatcher = Application.Current.Dispatcher;
-            // 3 concurrent: 1 generating on GPU + 2 queued ready to start instantly
-            var concurrency = new SemaphoreSlim(3, 3);
+            // Cloud: 2 concurrent (API rate limits), SD: 3 concurrent (1 GPU + 2 queued)
+            var maxConcurrency = UseCloudImageGen ? 2 : 3;
+            var concurrency = new SemaphoreSlim(maxConcurrency, maxConcurrency);
             int failureCount = 0;
 
-            StatusMessage = $"กำลังสร้างภาพ {pending.Count} ภาพ (อิสระ, 3 พร้อมกัน)...";
+            StatusMessage = $"กำลังสร้างภาพ {pending.Count} ภาพ (อิสระ, {maxConcurrency} พร้อมกัน)...";
 
             var tasks = pending.Select(x => Task.Run(async () =>
             {
@@ -478,15 +843,25 @@ public partial class MultiImageViewModel : ObservableObject
                     if (Volatile.Read(ref failureCount) >= 3)
                         return;
 
-                    var fullPrompt = StylePrefix + x.scene.ImagePrompt;
-                    var imageBytes = await _sdService.GenerateImageAsync(
-                        fullPrompt, NegativePrompt, ImageWidth, ImageHeight, token);
+                    byte[] imageBytes;
+                    if (UseCloudImageGen)
+                    {
+                        imageBytes = await _googleTtsService.GenerateImageAsync(
+                            x.scene.ImagePrompt, SelectedCloudModel, null, "16:9", token);
+                    }
+                    else
+                    {
+                        var fullPrompt = StylePrefix + x.scene.ImagePrompt;
+                        imageBytes = await _sdService.GenerateImageAsync(
+                            fullPrompt, NegativePrompt, ImageWidth, ImageHeight, token);
+                    }
 
                     var imagePath = Path.Combine(outputFolder, $"scene_{x.index:D3}.png");
                     await File.WriteAllBytesAsync(imagePath, imageBytes, token);
 
                     dispatcher.Invoke(() =>
                     {
+                        x.scene.ImagePath = null; // Force PropertyChanged even if path is same
                         x.scene.ImagePath = imagePath;
                         ImagesGenerated++;
                         CurrentProgress = (int)(100.0 * ImagesGenerated / TotalImages);
@@ -551,6 +926,7 @@ public partial class MultiImageViewModel : ObservableObject
         {
             IsProcessing = true;
             _processingCts?.Cancel();
+            _processingCts?.Dispose();
             _processingCts = new CancellationTokenSource();
 
             var outputFolder = GetScenesFolder();
@@ -570,8 +946,24 @@ public partial class MultiImageViewModel : ObservableObject
                 return;
             }
 
-            // Ensure SD is running (auto-launch if needed)
-            if (!await EnsureSdRunningAsync(_processingCts.Token))
+            // Last scene uses cover/reference image as bookend
+            var allScenesForBookend = AllScenes;
+            if (allScenesForBookend.Count > 1
+                && scene.SceneIndex == allScenesForBookend.Count - 1
+                && !string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
+            {
+                StatusMessage = "ใช้ภาพปกเป็น scene สุดท้าย (bookend)...";
+                var imagePath = Path.Combine(outputFolder, $"scene_{scene.SceneIndex:D3}.png");
+                File.Copy(ReferenceImagePath, imagePath, overwrite: true);
+                scene.ImagePath = imagePath;
+                OnPropertyChanged(nameof(AllScenes));
+                StatusMessage = "ใช้ภาพปกเป็น Scene สุดท้าย (bookend) แล้ว";
+                SnackbarQueue.Enqueue("ใช้ภาพปกเป็น Scene สุดท้าย (bookend) แล้ว");
+                return;
+            }
+
+            // Ensure SD is running — skip for cloud
+            if (!UseCloudImageGen && !await EnsureSdRunningAsync(_processingCts.Token))
             {
                 IsProcessing = false;
                 return;
@@ -585,28 +977,27 @@ public partial class MultiImageViewModel : ObservableObject
             if (UseSceneChaining && scene.SceneIndex > 0)
             {
                 var allScenes = AllScenes;
-                var prevScene = allScenes[scene.SceneIndex - 1];
-                if (!string.IsNullOrWhiteSpace(prevScene.ImagePath) && File.Exists(prevScene.ImagePath))
+                var prevScene = scene.SceneIndex <= allScenes.Count ? allScenes[scene.SceneIndex - 1] : null;
+                if (prevScene != null && !string.IsNullOrWhiteSpace(prevScene.ImagePath) && File.Exists(prevScene.ImagePath))
                 {
-                    var chainedPrompt = StylePrefix + ChainingConsistencyPrefix + scene.ImagePrompt;
-                    imageBytes = await _sdService.GenerateImageWithReferenceAsync(
-                        chainedPrompt, prevScene.ImagePath, DenoisingStrength,
-                        NegativePrompt, ImageWidth, ImageHeight, _processingCts.Token);
+                    var chainPrompt = UseCloudImageGen
+                        ? $"Based on the reference image style, create the next scene: {scene.ImagePrompt}"
+                        : ChainingConsistencyPrefix + scene.ImagePrompt;
+                    imageBytes = await GenerateSceneImageAsync(chainPrompt, prevScene.ImagePath, _processingCts.Token);
                 }
                 else
                 {
-                    var fullPrompt = StylePrefix + scene.ImagePrompt;
-                    imageBytes = await GenerateSceneImageAsync(fullPrompt, _processingCts.Token);
+                    imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, ReferenceImagePath, _processingCts.Token);
                 }
             }
             else
             {
-                var fullPrompt = StylePrefix + scene.ImagePrompt;
-                imageBytes = await GenerateSceneImageAsync(fullPrompt, _processingCts.Token);
+                imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, ReferenceImagePath, _processingCts.Token);
             }
 
             var imgPath = Path.Combine(outputFolder, $"scene_{scene.SceneIndex:D3}.png");
             await File.WriteAllBytesAsync(imgPath, imageBytes, _processingCts.Token);
+            scene.ImagePath = null; // Force PropertyChanged even if path is same
             scene.ImagePath = imgPath;
 
             OnPropertyChanged(nameof(AllScenes));
@@ -678,7 +1069,7 @@ public partial class MultiImageViewModel : ObservableObject
         };
         if (dlg.ShowDialog() == true)
         {
-            ReferenceImagePath = dlg.FileName;
+            ReferenceImagePath = CompressImageIfNeeded(dlg.FileName, GetScenesFolder());
             SnackbarQueue.Enqueue("ตั้งค่าภาพอ้างอิงแล้ว — ภาพใหม่จะถูกสร้างให้มีสไตล์ใกล้เคียง");
         }
     }
@@ -688,6 +1079,41 @@ public partial class MultiImageViewModel : ObservableObject
     {
         ReferenceImagePath = null;
         SnackbarQueue.Enqueue("ล้างภาพอ้างอิงแล้ว — จะใช้ txt2img ปกติ");
+    }
+
+    [RelayCommand]
+    private void BrowseBgmFile()
+    {
+        var dlg = new OpenFileDialog
+        {
+            Filter = "Audio files (*.mp3;*.wav;*.ogg;*.flac)|*.mp3;*.wav;*.ogg;*.flac|All files (*.*)|*.*",
+            Title = "เลือกเพลงพื้นหลัง (BGM)"
+        };
+        if (dlg.ShowDialog() == true)
+        {
+            BgmFilePath = dlg.FileName;
+            BgmEnabled = true;
+            // SyncBgmSelection is called by the caller (OnSelectedBgmTrackChanged)
+            SnackbarQueue.Enqueue($"ตั้งค่า BGM: {Path.GetFileName(dlg.FileName)}");
+        }
+    }
+
+    [RelayCommand]
+    private void ClearBgm()
+    {
+        StopBgmPreview();
+        BgmFilePath = "";
+        BgmEnabled = false;
+
+        // Remove custom file items from dropdown
+        var customItems = BgmTrackItems.Where(i => i.CustomFilePath != null).ToList();
+        foreach (var ci in customItems) BgmTrackItems.Remove(ci);
+
+        _isSyncingBgmSelection = true;
+        SelectedBgmTrack = null;
+        _isSyncingBgmSelection = false;
+
+        SnackbarQueue.Enqueue("ล้าง BGM แล้ว");
     }
 
     [RelayCommand]
@@ -757,6 +1183,7 @@ public partial class MultiImageViewModel : ObservableObject
         }
 
         _processingCts?.Cancel();
+        _processingCts?.Dispose();
         _processingCts = new CancellationTokenSource();
         var cts = CancellationTokenSource.CreateLinkedTokenSource(_processingCts.Token);
         Task? timerTask = null;
@@ -838,6 +1265,7 @@ public partial class MultiImageViewModel : ObservableObject
             {
                 IsProcessing = true;
                 _processingCts?.Cancel();
+                _processingCts?.Dispose();
                 _processingCts = new CancellationTokenSource();
             }
             var outputFolder = GetOutputFolder();
@@ -999,6 +1427,7 @@ public partial class MultiImageViewModel : ObservableObject
                 StatusMessage = "กำลังสร้างวิดีโอ...";
                 CurrentProgress = 0;
                 _processingCts?.Cancel();
+                _processingCts?.Dispose();
                 _processingCts = new CancellationTokenSource();
             }
             else
@@ -1011,9 +1440,16 @@ public partial class MultiImageViewModel : ObservableObject
             var videoPath = Path.Combine(outputFolder, $"EP{EpisodeNumber}_MultiImage.mp4");
             var progress = new Progress<int>(p => CurrentProgress = p);
 
+            // Build BGM options if enabled
+            BgmOptions? bgmOptions = null;
+            if (BgmEnabled && !string.IsNullOrWhiteSpace(BgmFilePath) && File.Exists(BgmFilePath))
+            {
+                bgmOptions = new BgmOptions(BgmFilePath, BgmVolume);
+            }
+
             FinalVideoPath = await _ffmpegService.CreateMultiImageVideoAsync(
                 sceneImages, audioFiles, videoPath,
-                _settings.UseGpuEncoding, progress, _processingCts!.Token);
+                _settings.UseGpuEncoding, progress, _processingCts!.Token, bgmOptions);
 
             StatusMessage = "สร้างวิดีโอสำเร็จ!";
             CurrentProgress = 100;
@@ -1062,6 +1498,7 @@ public partial class MultiImageViewModel : ObservableObject
         {
             IsProcessing = true;
             _processingCts?.Cancel();
+            _processingCts?.Dispose();
             _processingCts = new CancellationTokenSource();
             _isRunAll = true;
 
@@ -1192,6 +1629,7 @@ public partial class MultiImageViewModel : ObservableObject
         {
             IsProcessing = true;
             _processingCts?.Cancel();
+            _processingCts?.Dispose();
             _processingCts = new CancellationTokenSource();
             _isRunAll = true;
 
@@ -1320,8 +1758,6 @@ public partial class MultiImageViewModel : ObservableObject
                 {
                     if (PlayingAudioIndex == idx) PlayingAudioIndex = -1;
                 });
-                reader.Dispose();
-                player.Dispose();
             };
             player.Play();
             PlayingAudioIndex = partIndex;
@@ -1336,10 +1772,72 @@ public partial class MultiImageViewModel : ObservableObject
     private void StopAudioPlayback()
     {
         var waveOut = _waveOut;
+        var reader = _audioFileReader;
         _waveOut = null;
         _audioFileReader = null;
         try { waveOut?.Stop(); } catch { }
+        try { waveOut?.Dispose(); } catch { }
+        try { reader?.Dispose(); } catch { }
         PlayingAudioIndex = -1;
+    }
+
+    // === BGM Preview Playback ===
+    [RelayCommand]
+    private void ToggleBgmPreview()
+    {
+        if (IsBgmPreviewPlaying)
+        {
+            StopBgmPreview();
+            return;
+        }
+
+        string? previewPath = null;
+        if (SelectedBgmTrack?.Track != null)
+            previewPath = BgmLibrary.GetFullPath(SelectedBgmTrack.Track);
+        else if (!string.IsNullOrWhiteSpace(SelectedBgmTrack?.CustomFilePath))
+            previewPath = SelectedBgmTrack.CustomFilePath;
+        else if (!string.IsNullOrWhiteSpace(BgmFilePath))
+            previewPath = BgmFilePath;
+
+        if (string.IsNullOrWhiteSpace(previewPath) || !File.Exists(previewPath))
+        {
+            SnackbarQueue.Enqueue("เลือกเพลง BGM ก่อน");
+            return;
+        }
+
+        try
+        {
+            StopBgmPreview();
+            var reader = new AudioFileReader(previewPath);
+            reader.Volume = Math.Min((float)(BgmVolume * 2), 1.0f);
+            var player = new WaveOutEvent();
+            _bgmPreviewReader = reader;
+            _bgmPreviewPlayer = player;
+            player.Init(reader);
+            player.PlaybackStopped += (s, e) =>
+            {
+                Application.Current.Dispatcher.Invoke(() => IsBgmPreviewPlaying = false);
+            };
+            player.Play();
+            IsBgmPreviewPlaying = true;
+        }
+        catch (Exception ex)
+        {
+            SnackbarQueue.Enqueue($"เล่น BGM ไม่ได้: {ex.Message}");
+            IsBgmPreviewPlaying = false;
+        }
+    }
+
+    private void StopBgmPreview()
+    {
+        var player = _bgmPreviewPlayer;
+        var reader = _bgmPreviewReader;
+        _bgmPreviewPlayer = null;
+        _bgmPreviewReader = null;
+        try { player?.Stop(); } catch { }
+        try { player?.Dispose(); } catch { }
+        try { reader?.Dispose(); } catch { }
+        IsBgmPreviewPlaying = false;
     }
 
     // === Navigation ===
@@ -1391,6 +1889,7 @@ public partial class MultiImageViewModel : ObservableObject
         try
         {
             _processingCts?.Cancel();
+            _processingCts?.Dispose();
             _processingCts = new CancellationTokenSource();
             var progress = new Progress<string>(s => StatusMessage = s);
             IsSdConnected = await _sdService.LaunchAsync(progress, _processingCts.Token);
@@ -1540,6 +2039,7 @@ public partial class MultiImageViewModel : ObservableObject
     }
 
     private bool _isLoadingModels; // prevent model switch during initial load
+    private bool _isRestoringState; // prevent settings save during state restoration
 
     private async Task<bool> EnsureSdRunningAsync(CancellationToken cancellationToken)
     {
@@ -1597,6 +2097,69 @@ public partial class MultiImageViewModel : ObservableObject
     private string GetScenesFolder()
         => Path.Combine(GetOutputFolder(), "scenes");
 
+    private const long MaxCoverImageBytes = 2 * 1024 * 1024; // 2MB
+
+    /// <summary>Compress image to ≤2MB if needed. Returns original path if already small enough.</summary>
+    internal static string CompressImageIfNeeded(string imagePath, string outputFolder)
+    {
+        try
+        {
+            var fileInfo = new FileInfo(imagePath);
+            if (!fileInfo.Exists || fileInfo.Length <= MaxCoverImageBytes)
+                return imagePath;
+
+            Directory.CreateDirectory(outputFolder);
+            var compressedPath = Path.Combine(outputFolder, "cover_compressed.jpg");
+
+            var bi = new BitmapImage();
+            bi.BeginInit();
+            bi.UriSource = new Uri(Path.GetFullPath(imagePath));
+            bi.CacheOption = BitmapCacheOption.OnLoad;
+            bi.EndInit();
+            bi.Freeze();
+
+            BitmapSource source = bi;
+            if (bi.PixelWidth > 1920)
+            {
+                double scale = 1920.0 / bi.PixelWidth;
+                source = new TransformedBitmap(bi, new ScaleTransform(scale, scale));
+            }
+
+            foreach (var quality in new[] { 90, 80, 70, 60, 50 })
+            {
+                var encoder = new JpegBitmapEncoder { QualityLevel = quality };
+                encoder.Frames.Add(BitmapFrame.Create(source));
+                using var ms = new MemoryStream();
+                encoder.Save(ms);
+                if (ms.Length <= MaxCoverImageBytes)
+                {
+                    File.WriteAllBytes(compressedPath, ms.ToArray());
+                    AppLogger.Log($"Cover compressed: {fileInfo.Length / 1024}KB → {ms.Length / 1024}KB (JPEG q={quality})");
+                    return compressedPath;
+                }
+            }
+
+            // Last resort: resize to 1280px + quality 50
+            if (bi.PixelWidth > 1280)
+            {
+                double finalScale = 1280.0 / bi.PixelWidth;
+                source = new TransformedBitmap(bi, new ScaleTransform(finalScale, finalScale));
+            }
+            var finalEncoder = new JpegBitmapEncoder { QualityLevel = 50 };
+            finalEncoder.Frames.Add(BitmapFrame.Create(source));
+            using var finalMs = new MemoryStream();
+            finalEncoder.Save(finalMs);
+            File.WriteAllBytes(compressedPath, finalMs.ToArray());
+            AppLogger.Log($"Cover compressed (final): {fileInfo.Length / 1024}KB → {finalMs.Length / 1024}KB");
+            return compressedPath;
+        }
+        catch (Exception ex)
+        {
+            AppLogger.LogError(ex, "CompressImageIfNeeded failed, using original");
+            return imagePath;
+        }
+    }
+
     private static string SanitizeFolderName(string name)
     {
         var invalidChars = Path.GetInvalidFileNameChars();
@@ -1637,7 +2200,12 @@ public partial class MultiImageViewModel : ObservableObject
             DenoisingStrength = DenoisingStrength,
             IsRealisticStyle = IsRealisticStyle,
             UseSceneChaining = UseSceneChaining,
-            SelectedModel = SelectedModel
+            SelectedModel = SelectedModel,
+            UseCloudImageGen = UseCloudImageGen,
+            SelectedCloudModel = SelectedCloudModel,
+            BgmFilePath = BgmFilePath,
+            BgmVolume = BgmVolume,
+            BgmEnabled = BgmEnabled
         };
 
         foreach (var part in Parts)
@@ -1665,6 +2233,47 @@ public partial class MultiImageViewModel : ObservableObject
         if (!state.Save(GetOutputFolder()))
         {
             SnackbarQueue.Enqueue("บันทึกโปรเจกต์ไม่สำเร็จ! ตรวจสอบโฟลเดอร์ Output");
+        }
+    }
+
+    private async Task SaveScriptsToFilesAsync()
+    {
+        if (Parts.Count == 0) return;
+
+        try
+        {
+            var outputFolder = GetOutputFolder();
+            Directory.CreateDirectory(outputFolder);
+
+            for (int i = 0; i < Parts.Count; i++)
+            {
+                var narration = Parts[i].GetFullNarrationText();
+                if (string.IsNullOrWhiteSpace(narration)) continue;
+
+                var partNumber = i + 1;
+
+                // Save as .txt
+                var txtPath = Path.Combine(outputFolder, $"บท{partNumber}.txt");
+                await File.WriteAllTextAsync(txtPath, narration);
+
+                // Save as .docx
+                var docxPath = Path.Combine(outputFolder, $"บท{partNumber}.docx");
+                await _documentService.SaveAsDocxAsync(narration, docxPath);
+            }
+
+            // Save topic file (once)
+            var topicPath = Path.Combine(outputFolder, "หัวข้อเรื่อง.txt");
+            if (!File.Exists(topicPath))
+            {
+                await File.WriteAllTextAsync(topicPath,
+                    $"หัวข้อ: {TopicText}\nEpisode: {EpisodeNumber}\nวันที่สร้าง: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+            }
+
+            AppLogger.Log($"SaveScriptsToFiles: saved {Parts.Count} parts to {outputFolder}");
+        }
+        catch (Exception ex)
+        {
+            AppLogger.LogError(ex, "SaveScriptsToFiles failed");
         }
     }
 
@@ -1699,6 +2308,7 @@ public partial class MultiImageViewModel : ObservableObject
         if (state == null || !state.HasData()) return false;
         if (state.EpisodeNumber != EpisodeNumber) return false;
 
+        _isRestoringState = true;
         TopicText = state.TopicText;
         CurrentStepIndex = state.CurrentStepIndex;
         FinalVideoPath = state.FinalVideoPath;
@@ -1714,6 +2324,17 @@ public partial class MultiImageViewModel : ObservableObject
             SelectedModel = state.SelectedModel;
             _isLoadingModels = false;
         }
+
+        // Restore cloud image gen settings
+        UseCloudImageGen = state.UseCloudImageGen;
+        SelectedCloudModel = !string.IsNullOrWhiteSpace(state.SelectedCloudModel)
+            ? state.SelectedCloudModel
+            : "gemini-2.5-flash-image";
+
+        // Restore BGM settings
+        BgmEnabled = state.BgmEnabled;
+        BgmFilePath = state.BgmFilePath ?? "";
+        BgmVolume = state.BgmVolume > 0.001 ? state.BgmVolume : 0.25;
 
         Parts.Clear();
         foreach (var pd in state.Parts)
@@ -1748,6 +2369,7 @@ public partial class MultiImageViewModel : ObservableObject
         OnPropertyChanged(nameof(AllScenes));
         OnPropertyChanged(nameof(StepCompleted));
 
+        _isRestoringState = false;
         StatusMessage = $"โหลดโปรเจกต์ (บันทึกเมื่อ {state.LastSaved:dd/MM/yyyy HH:mm})";
         return true;
     }
@@ -1762,6 +2384,7 @@ public partial class MultiImageViewModel : ObservableObject
 
         _processingCts?.Cancel();
         StopAudioPlayback();
+        StopBgmPreview();
 
         if (_sdService.IsProcessRunning)
         {

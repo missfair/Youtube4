@@ -21,5 +21,13 @@ public interface IOpenRouterService
         CancellationToken cancellationToken = default,
         string? topicTitle = null);
 
+    Task<byte[]> GenerateSceneImageFromCloudAsync(
+        string prompt,
+        string model,
+        string? referenceImagePath = null,
+        string aspectRatio = "16:9",
+        IProgress<int>? progress = null,
+        CancellationToken cancellationToken = default);
+
     Task<bool> TestConnectionAsync(string apiKey);
 }

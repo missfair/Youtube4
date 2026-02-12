@@ -1,5 +1,6 @@
 using System.IO;
 using Newtonsoft.Json;
+using YoutubeAutomation.Services;
 
 namespace YoutubeAutomation.Models;
 
@@ -16,6 +17,11 @@ public class MultiImageState
     public bool IsRealisticStyle { get; set; }
     public bool UseSceneChaining { get; set; }
     public string SelectedModel { get; set; } = "";
+    public bool UseCloudImageGen { get; set; }
+    public string SelectedCloudModel { get; set; } = "";
+    public string BgmFilePath { get; set; } = "";
+    public double BgmVolume { get; set; } = 0.25;
+    public bool BgmEnabled { get; set; }
     public DateTime LastSaved { get; set; }
 
     public class PartData
@@ -46,7 +52,10 @@ public class MultiImageState
                 return JsonConvert.DeserializeObject<MultiImageState>(json);
             }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            AppLogger.LogError(ex, $"MultiImageState.Load failed: {outputFolder}");
+        }
         return null;
     }
 

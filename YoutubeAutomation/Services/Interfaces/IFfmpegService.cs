@@ -1,3 +1,5 @@
+using YoutubeAutomation.Models;
+
 namespace YoutubeAutomation.Services.Interfaces;
 
 public interface IFfmpegService
@@ -21,5 +23,6 @@ public interface IFfmpegService
         string outputPath,
         bool useGpu = false,
         IProgress<int>? progress = null,
-        CancellationToken cancellationToken = default);
+        CancellationToken cancellationToken = default,
+        BgmOptions? bgmOptions = null);
 }

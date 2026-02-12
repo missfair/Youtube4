@@ -268,7 +268,8 @@ public class FfmpegService : IFfmpegService
         string outputPath,
         bool useGpu = false,
         IProgress<int>? progress = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        BgmOptions? bgmOptions = null)
     {
         if (sceneImages.Count == 0)
             throw new Exception("No scene images provided");
@@ -325,12 +326,12 @@ public class FfmpegService : IFfmpegService
                 await RunFfmpegAsync(ffmpegPath, args, cancellationToken);
                 clipPaths.Add(clipPath);
 
-                var clipProgress = 5 + (int)(55.0 * (i + 1) / sceneImages.Count);
+                var clipProgress = 5 + (int)(45.0 * (i + 1) / sceneImages.Count);
                 progress?.Report(clipProgress);
             }
 
             // === Pass 2: Merge audio ===
-            progress?.Report(62);
+            progress?.Report(50);
             var mergedAudioPath = Path.Combine(tempDir, "merged_audio.wav");
             var concatListPath = Path.Combine(tempDir, "audio_concat.txt");
             var concatContent = string.Join("\n", audioFiles.Select(f => $"file '{f.Replace("'", "'\\''")}'"));
@@ -340,13 +341,24 @@ public class FfmpegService : IFfmpegService
                 $"-f concat -safe 0 -i \"{concatListPath}\" -c copy \"{mergedAudioPath}\"",
                 cancellationToken);
 
+            progress?.Report(55);
+
+            // === Pass 2.5: Mix BGM with narration (if enabled) ===
+            var finalAudioPath = mergedAudioPath;
+            if (bgmOptions != null && File.Exists(bgmOptions.FilePath))
+            {
+                finalAudioPath = await MixBgmWithNarrationAsync(
+                    ffmpegPath, mergedAudioPath, bgmOptions, tempDir,
+                    progress, 55, 65, cancellationToken);
+            }
+
             progress?.Report(65);
 
             // === Pass 3: xfade combine clips + audio ===
             if (clipPaths.Count == 1)
             {
                 // Single clip: just add audio
-                var args = $"-i \"{clipPaths[0]}\" -i \"{mergedAudioPath}\" " +
+                var args = $"-i \"{clipPaths[0]}\" -i \"{finalAudioPath}\" " +
                     $"-c:v copy -c:a aac -b:a 192k -shortest -y \"{outputPath}\"";
                 await RunFfmpegAsync(ffmpegPath, args, cancellationToken);
             }
@@ -360,7 +372,7 @@ public class FfmpegService : IFfmpegService
                 // Build input args
                 var inputArgs = string.Join(" ", clipPaths.Select(p => $"-i \"{p}\""));
 
-                var totalDuration = GetAudioDuration(mergedAudioPath);
+                var totalDuration = GetAudioDuration(finalAudioPath);
 
                 var encodeArgs = useGpu
                     ? "-c:v h264_nvenc -preset p1 -tune hq -rc vbr -cq 23"
@@ -368,7 +380,7 @@ public class FfmpegService : IFfmpegService
 
                 // Read filter content and pass via -/filter_complex (FFmpeg 8.x compatible)
                 // -/filter_complex reads filter from file, replacing deprecated -filter_complex_script
-                var args = $"{inputArgs} -i \"{mergedAudioPath}\" " +
+                var args = $"{inputArgs} -i \"{finalAudioPath}\" " +
                     $"-/filter_complex \"{filterScriptPath}\" " +
                     $"-map \"[vout]\" -map {clipPaths.Count}:a " +
                     $"{encodeArgs} -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -y \"{outputPath}\"";
@@ -384,6 +396,61 @@ public class FfmpegService : IFfmpegService
             // Cleanup temp directory
             try { Directory.Delete(tempDir, true); } catch { }
         }
+    }
+
+    private async Task<string> MixBgmWithNarrationAsync(
+        string ffmpegPath,
+        string narrationAudioPath,
+        BgmOptions bgm,
+        string tempDir,
+        IProgress<int>? progress,
+        int progressStart,
+        int progressEnd,
+        CancellationToken cancellationToken)
+    {
+        var mixedAudioPath = Path.Combine(tempDir, "mixed_audio.wav");
+
+        // Get narration duration to calculate fade-out start time
+        var narrationDuration = GetAudioDuration(narrationAudioPath);
+        var totalSeconds = narrationDuration.TotalSeconds;
+
+        if (totalSeconds <= 0)
+        {
+            // Cannot determine duration; skip BGM mixing
+            return narrationAudioPath;
+        }
+
+        var fadeOutStart = Math.Max(0, totalSeconds - bgm.FadeOutSeconds);
+
+        // Format numbers for FFmpeg (invariant culture)
+        var inv = System.Globalization.CultureInfo.InvariantCulture;
+        var vol = bgm.Volume.ToString("F3", inv);
+        var fadeInDur = bgm.FadeInSeconds.ToString("F1", inv);
+        var fadeOutDur = bgm.FadeOutSeconds.ToString("F1", inv);
+        var fadeOutStartStr = fadeOutStart.ToString("F2", inv);
+
+        // Filter chain:
+        // 1. BGM: reduce volume + fade in/out
+        // 2. sidechaincompress: narration controls BGM ducking
+        // 3. amix: mix narration + ducked BGM
+        var filterComplex =
+            $"[1:a]volume={vol}," +
+            $"afade=t=in:st=0:d={fadeInDur}," +
+            $"afade=t=out:st={fadeOutStartStr}:d={fadeOutDur}[bgm];" +
+            $"[bgm][0:a]sidechaincompress=threshold=0.02:ratio=3:attack=200:release=1000:detection=rms[ducked];" +
+            $"[0:a][ducked]amix=inputs=2:duration=first:normalize=0[out]";
+
+        var args = $"-i \"{narrationAudioPath}\" -stream_loop -1 -i \"{bgm.FilePath}\" " +
+            $"-filter_complex \"{filterComplex}\" " +
+            $"-map \"[out]\" -c:a pcm_s16le -y \"{mixedAudioPath}\"";
+
+        AppLogger.Log($"BGM mix: vol={vol}, fadeIn={fadeInDur}s, fadeOut={fadeOutDur}s, duration={totalSeconds:F1}s");
+
+        await RunFfmpegWithProgressAsync(
+            ffmpegPath, args, narrationDuration, progress,
+            progressStart, progressEnd, cancellationToken);
+
+        return mixedAudioPath;
     }
 
     private string BuildXfadeFilterScript(

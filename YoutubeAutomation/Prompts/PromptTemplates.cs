@@ -208,4 +208,20 @@ public static class PromptTemplates
 
 ตอบเป็น prompt ภาษาอังกฤษเท่านั้น ประมาณ 2-3 ประโยค ไม่ต้องมีคำอธิบายอื่น";
     }
+
+    public static string GetMoodAnalysisPrompt(string scriptSummary) =>
+        $"""
+        Analyze this Thai documentary script and classify its overall mood.
+        Choose exactly ONE mood from: curious, upbeat, gentle, emotional
+
+        - curious: เรื่องน่าสงสัย ทำไมสัตว์ถึงทำแบบนี้ ความลับของธรรมชาติ ปริศนาที่ยังไม่มีคำตอบ
+        - upbeat: เรื่องสนุก น่าทึ่ง ความสามารถพิเศษของสัตว์ ข้อเท็จจริงที่น่าตื่นเต้น
+        - gentle: เรื่องธรรมชาติ วิทยาศาสตร์ อธิบายอย่างสงบ ความรู้ทั่วไป
+        - emotional: เรื่องซึ้ง ความผูกพัน สัตว์ช่วยคน มิตรภาพระหว่างสัตว์กับคน
+
+        Script excerpt:
+        {scriptSummary}
+
+        Reply with ONLY the mood word (curious, upbeat, gentle, or emotional). Nothing else.
+        """;
 }

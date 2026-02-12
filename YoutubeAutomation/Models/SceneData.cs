@@ -11,12 +11,12 @@ public partial class SceneData : ObservableObject
     [ObservableProperty] private double durationSeconds;
 }
 
-public class ScenePart
+public partial class ScenePart : ObservableObject
 {
     public int PartNumber { get; set; }
     public List<SceneData> Scenes { get; set; } = new();
-    public string? AudioPath { get; set; }
-    public double AudioDurationSeconds { get; set; }
+    [ObservableProperty] private string? audioPath;
+    [ObservableProperty] private double audioDurationSeconds;
 
     public string GetFullNarrationText()
         => string.Join("\n\n", Scenes.Select(s => s.Text));
@@ -40,7 +40,7 @@ public class ScenePart
             var ratio = AudioDurationSeconds / rawSum;
             foreach (var scene in Scenes)
             {
-                scene.DurationSeconds = Math.Max(3.0, scene.DurationSeconds * ratio);
+                scene.DurationSeconds *= ratio;
             }
         }
     }

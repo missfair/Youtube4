@@ -167,6 +167,7 @@ public class FilePathToImageConverter : IValueConverter
             bitmap.BeginInit();
             bitmap.UriSource = new Uri(path, UriKind.Absolute);
             bitmap.CacheOption = BitmapCacheOption.OnLoad;
+            bitmap.CreateOptions = BitmapCreateOptions.IgnoreImageCache;
             bitmap.EndInit();
             bitmap.Freeze();
             return bitmap;
@@ -176,6 +177,18 @@ public class FilePathToImageConverter : IValueConverter
             return null;
         }
     }
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
+public class BoolToStringConverter : IValueConverter
+{
+    public string TrueValue { get; set; } = "True";
+    public string FalseValue { get; set; } = "False";
+
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is true ? TrueValue : FalseValue;
 
     public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
         => throw new NotImplementedException();

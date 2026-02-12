@@ -555,7 +555,7 @@ public partial class MainViewModel : ObservableObject
 
         if (dialog.ShowDialog() == true)
         {
-            CoverImagePath = dialog.FileName;
+            CoverImagePath = MultiImageViewModel.CompressImageIfNeeded(dialog.FileName, GetOutputFolder());
             StatusMessage = "เลือกรูปปกแล้ว";
             SaveProjectState();
             UpdateStepCompletionStates();
@@ -1478,9 +1478,12 @@ public partial class MainViewModel : ObservableObject
     private void StopAudioPlayback()
     {
         var waveOut = _waveOut;
+        var reader = _audioFileReader;
         _waveOut = null;
         _audioFileReader = null;
-        try { waveOut?.Stop(); } catch { /* ignore */ }
+        try { waveOut?.Stop(); } catch { }
+        try { waveOut?.Dispose(); } catch { }
+        try { reader?.Dispose(); } catch { }
         PlayingAudioIndex = -1;
     }
 

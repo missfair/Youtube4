@@ -8,5 +8,12 @@ public interface IGoogleTtsService
         IProgress<int>? progress = null,
         CancellationToken cancellationToken = default);
 
+    Task<byte[]> GenerateImageAsync(
+        string prompt,
+        string model,
+        string? referenceImagePath = null,
+        string aspectRatio = "16:9",
+        CancellationToken cancellationToken = default);
+
     Task<bool> TestConnectionAsync(string apiKey);
 }

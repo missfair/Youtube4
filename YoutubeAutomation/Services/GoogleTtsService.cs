@@ -33,7 +33,7 @@ public class GoogleTtsService : IGoogleTtsService
         var url = $"{BaseUrl}/{model}:generateContent?key={_settings.GoogleApiKey}";
 
         // Format text for TTS
-        var formattedText = $"Read aloud in an informative, lower pitch, and mysterious tone.\n\nSpeaker 1: {text}";
+        var formattedText = $"Read aloud in a friendly, educational, and engaging tone. Like a fun documentary narrator.\n\nSpeaker 1: {text}";
 
         var request = new
         {
@@ -150,6 +150,91 @@ public class GoogleTtsService : IGoogleTtsService
         writer.Write(pcmData);
 
         return ms.ToArray();
+    }
+
+    public async Task<byte[]> GenerateImageAsync(
+        string prompt,
+        string model,
+        string? referenceImagePath = null,
+        string aspectRatio = "16:9",
+        CancellationToken cancellationToken = default)
+    {
+        var url = $"{BaseUrl}/{model}:generateContent?key={_settings.GoogleApiKey}";
+
+        // Build content parts
+        var parts = new List<object>();
+
+        // Add reference image if provided (multimodal input)
+        if (!string.IsNullOrWhiteSpace(referenceImagePath) && File.Exists(referenceImagePath))
+        {
+            var imageBytes = await File.ReadAllBytesAsync(referenceImagePath, cancellationToken);
+            var ext = Path.GetExtension(referenceImagePath).ToLowerInvariant();
+            var mimeType = ext switch
+            {
+                ".jpg" or ".jpeg" => "image/jpeg",
+                ".webp" => "image/webp",
+                _ => "image/png"
+            };
+            parts.Add(new { inlineData = new { mimeType, data = Convert.ToBase64String(imageBytes) } });
+        }
+
+        parts.Add(new { text = prompt });
+
+        var request = new
+        {
+            contents = new[]
+            {
+                new { parts = parts.ToArray() }
+            },
+            generationConfig = new
+            {
+                responseModalities = new[] { "TEXT", "IMAGE" },
+                imageConfig = new { aspectRatio, imageSize = "2K" }
+            }
+        };
+
+        var json = JsonConvert.SerializeObject(request);
+        var content = new StringContent(json, Encoding.UTF8, "application/json");
+
+        AppLogger.Log($"Google Image API: model={model}, prompt={prompt.Length}chars, ref={referenceImagePath != null}");
+
+        var response = await _httpClient.PostAsync(url, content, cancellationToken);
+        var responseContent = await response.Content.ReadAsStringAsync(cancellationToken);
+
+        if (!response.IsSuccessStatusCode)
+        {
+            throw new Exception($"Google Image API error: {response.StatusCode} - {responseContent}");
+        }
+
+        var result = JObject.Parse(responseContent);
+        var candidates = result["candidates"] as JArray;
+        if (candidates == null || candidates.Count == 0)
+            throw new Exception("Google Image API: ไม่มี candidates ใน response");
+
+        // Find image part in response
+        var responseParts = candidates[0]?["content"]?["parts"] as JArray;
+        if (responseParts == null)
+            throw new Exception("Google Image API: ไม่มี parts ใน response");
+
+        foreach (var part in responseParts)
+        {
+            var inlineData = part["inlineData"];
+            if (inlineData != null)
+            {
+                var mime = inlineData["mimeType"]?.ToString() ?? "";
+                if (mime.StartsWith("image/"))
+                {
+                    var base64 = inlineData["data"]?.ToString();
+                    if (!string.IsNullOrWhiteSpace(base64))
+                    {
+                        AppLogger.Log($"Google Image API: OK, mime={mime}, size={base64.Length / 1024}KB base64");
+                        return Convert.FromBase64String(base64);
+                    }
+                }
+            }
+        }
+
+        throw new Exception("Google Image API: ไม่พบรูปภาพใน response\n\n" + responseContent.Substring(0, Math.Min(500, responseContent.Length)));
     }
 
     public async Task<bool> TestConnectionAsync(string apiKey)

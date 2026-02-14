@@ -65,14 +65,17 @@ public partial class App : Application
         services.AddSingleton<IFfmpegService, FfmpegService>();
         services.AddSingleton<IDocumentService, DocumentService>();
         services.AddSingleton<IStableDiffusionService, StableDiffusionService>();
+        services.AddSingleton<IVideoHistoryService, VideoHistoryService>();
 
         // Register ViewModels
         services.AddSingleton<MainViewModel>();
         services.AddTransient<MultiImageViewModel>();
+        services.AddTransient<TopicSuggestionViewModel>();
 
         // Register Views
         services.AddSingleton<MainWindow>();
         services.AddTransient<MultiImageWindow>();
+        services.AddTransient<TopicSuggestionWindow>();
     }
 
     protected override void OnStartup(StartupEventArgs e)

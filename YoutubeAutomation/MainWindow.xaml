@@ -77,6 +77,13 @@
                             <TextBlock Text="Multi-Image" Margin="8,0,0,0"/>
                         </StackPanel>
                     </Button>
+                    <Button Command="{Binding OpenTopicSuggestionWindowCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,8,0"
+                            ToolTip="AI แนะนำหัวข้อใหม่">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon Kind="Lightbulb" VerticalAlignment="Center"/>
+                            <TextBlock Text="แนะนำหัวข้อ" Margin="8,0,0,0"/>
+                        </StackPanel>
+                    </Button>
                     <Button Command="{Binding NewProjectCommand}" Style="{StaticResource MaterialDesignOutlinedButton}" Margin="0,0,8,0">
                         <StackPanel Orientation="Horizontal">
                             <materialDesign:PackIcon Kind="Plus" VerticalAlignment="Center"/>

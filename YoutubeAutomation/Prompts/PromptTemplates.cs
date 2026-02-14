@@ -205,6 +205,8 @@ public static class PromptTemplates
   * ใช้ lighting/mood โทนเดียวกันตลอด Part (เช่น ""warm golden lighting"" ทุก scene)
   * เปลี่ยนแค่ camera angle หรือ action ให้เล่าเรื่องต่อเนื่อง ไม่เปลี่ยน subject หรือ setting ทั้งหมด
 - ห้ามใส่ style keywords (ระบบจะเติมให้เอง)
+- **ห้ามใส่คำเหล่านี้ใน image_prompt เด็ดขาด:** cartoon, illustration, drawing, animated, comic, anime, painting, sketch, artwork, digital art, 3D render
+- ให้เขียน image_prompt เป็นแบบภาพถ่ายจริง (photorealistic) เสมอ เช่น ""A real photograph of..."", ""Photorealistic image of...""
 - ห้ามมีตัวอักษร/ข้อความในภาพ
 - เน้น landscape composition (16:9)
 

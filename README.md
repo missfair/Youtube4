@@ -52,6 +52,7 @@ Color Palette: Muted colors (สีเหลืองทราย, เขีย�
 | 5. รวมเป็นวิดีโอ | เปิด editor ตัดต่อเอง | **อัตโนมัติ** (FFmpeg) |
 | 6. **Multi-Image** | ต้องทำภาพหลายภาพเอง | **อัตโนมัติ** (SD Local / Cloud + FFmpeg 2-pass) |
 | 7. **BGM** | หา BGM + ปรับเสียงเอง | **อัตโนมัติ** (16 built-in tracks + AI mood analysis) |
+| 8. **แนะนำหัวข้อ** | คิดหัวข้อเอง ซ้ำบ่อย | **AI แนะนำ** 5 หัวข้อ ไม่ซ้ำ + ประวัติ |
 
 **ผลลัพธ์:** จาก ~2-3 ชั่วโมงต่อ Episode เหลือกด "Run All Flow" รอ ~10-15 นาที ได้วิดีโอพร้อม upload
 
@@ -74,6 +75,7 @@ YoutubeAutomation/
     ├── App.xaml.cs                   # Entry point + DI + Global Exception Handlers
     ├── MainWindow.xaml               # Main UI (7-step wizard)
     ├── MultiImageWindow.xaml         # Multi-Image UI (6-step wizard)
+    ├── TopicSuggestionWindow.xaml    # Topic Suggestion UI (AI แนะนำหัวข้อ)
     ├── Converters.cs                 # WPF value converters
     ├── Models/
     │   ├── VideoProject.cs           # Project data container
@@ -82,6 +84,7 @@ YoutubeAutomation/
     │   ├── MultiImageState.cs        # Multi-Image state persistence
     │   ├── ContentCategory.cs        # Per-category config (prompts, TTS tone, image style, BGM)
     │   ├── ContentCategoryRegistry.cs # Static registry (4 active + 4 future categories)
+    │   ├── SuggestedTopic.cs          # AI-suggested topic with category
     │   ├── SceneData.cs              # Scene + ScenePart models
     │   ├── WorkflowStep.cs           # Step status tracking
     │   ├── BgmLibrary.cs             # Built-in BGM library (16 tracks, 8 moods × 2)
@@ -93,16 +96,19 @@ YoutubeAutomation/
     │   │   ├── IGoogleTtsService.cs
     │   │   ├── IFfmpegService.cs
     │   │   ├── IDocumentService.cs
-    │   │   └── IStableDiffusionService.cs
+    │   │   ├── IStableDiffusionService.cs
+    │   │   └── IVideoHistoryService.cs
     │   ├── OpenRouterService.cs      # AI text/image generation (OpenRouter)
     │   ├── GoogleTtsService.cs       # Text-to-Speech (Google Gemini TTS)
     │   ├── FfmpegService.cs          # Video encoding (single + multi-image)
     │   ├── DocumentService.cs        # DOCX export
     │   ├── StableDiffusionService.cs # Local SD Forge API (auto-detect port)
+    │   ├── VideoHistoryService.cs    # Topic history management (thread-safe)
     │   └── AppLogger.cs              # File-based crash logging
     ├── ViewModels/
     │   ├── MainViewModel.cs          # Main flow logic
-    │   └── MultiImageViewModel.cs    # Multi-image flow logic
+    │   ├── MultiImageViewModel.cs    # Multi-image flow logic
+    │   └── TopicSuggestionViewModel.cs  # Topic suggestion logic
     └── Prompts/
         └── PromptTemplates.cs        # AI prompt templates (category-aware)
 ```
@@ -338,6 +344,31 @@ Multi-Image mode รองรับ **เพลงประกอบอัตโ
 
 ---
 
+## Topic Suggestion (แนะนำหัวข้อ)
+
+หน้าต่างเฉพาะสำหรับ **AI แนะนำหัวข้อใหม่** โดยอ้างอิงจากประวัติหัวข้อที่เคยทำ เพื่อไม่ให้ซ้ำ
+
+### Features
+- **เลือกหมวดเนื้อหา** — เลือก animal/body/history/space แล้ว AI จะแนะนำหัวข้อเฉพาะหมวดนั้น
+- **AI แนะนำ 5 หัวข้อ** — สร้างหัวข้อใหม่ที่ไม่ซ้ำกับประวัติ พร้อมเงื่อนไขตาม category (คำนำหน้า, ตัวอย่างดี/ไม่ดี)
+- **ดูประวัติหัวข้อ** — แสดง/ซ่อนรายการหัวข้อที่เคยทำ (20 หัวข้อล่าสุด)
+- **Copy to Clipboard** — คัดลอกหัวข้อไป clipboard
+- **Use in MainWindow** — ตั้งหัวข้อ + หมวดใน Main Flow ทันที
+- **Use in Multi-Image** — เปิด Multi-Image Window พร้อมหัวข้อ + หมวดที่เลือก
+- **First-time Guidance** — ถ้ายังไม่มีประวัติ จะถามให้สแกนโฟลเดอร์ EP อัตโนมัติ
+
+### Video History Service
+จัดการประวัติหัวข้อใน `video_history.txt`:
+- **โหลดประวัติ** — อ่านทุกหัวข้อจากไฟล์ (dedup อัตโนมัติ)
+- **บันทึกหัวข้อ** — เพิ่มหัวข้อใหม่ (thread-safe ด้วย `SemaphoreSlim`)
+- **Migrate จาก EP folders** — สแกนโฟลเดอร์ `หัวข้อเรื่อง.txt` หรือชื่อโฟลเดอร์ EP
+- **Atomic writes** — เขียนไฟล์ผ่าน temp file → rename เพื่อป้องกันข้อมูลเสียหาย
+- **Periodic dedup + sort** — ทุก 10 ครั้งที่บันทึก จะ dedup และเรียงลำดับ
+
+**ที่เก็บ:** `video_history.txt` อยู่ในโฟลเดอร์เดียวกับ Output (กำหนดได้ใน Settings)
+
+---
+
 ## Quick Start
 
 ### Prerequisites
@@ -431,6 +462,7 @@ Settings จะถูกบันทึกที่:
 | `BgmFilePath` | `""` | Path to BGM file |
 | `BgmVolume` | `0.25` | BGM volume (0.0-1.0) |
 | `DefaultCategoryKey` | `"animal"` | หมวดเนื้อหาเริ่มต้น (animal/body/history/space) |
+| `VideoHistoryFilePath` | `""` | Path to video_history.txt (ประวัติหัวข้อ) |
 
 ---
 
@@ -506,6 +538,9 @@ Logs จะบันทึก:
 | 10 | `Models/BgmLibrary.cs` | Built-in BGM library (16 tracks, 8 moods × 2) |
 | 11 | `Models/ContentCategory.cs` | Per-category config (prompts, TTS, image, BGM, hashtags) |
 | 12 | `Models/ContentCategoryRegistry.cs` | Static registry (4 active + 4 future categories) |
+| 13 | `ViewModels/TopicSuggestionViewModel.cs` | Topic suggestion logic + AI prompt |
+| 14 | `Services/VideoHistoryService.cs` | Topic history management (thread-safe) |
+| 15 | `TopicSuggestionWindow.xaml` | Topic suggestion UI |
 
 ### Important Patterns
 - `[ObservableProperty]` generates `OnXxxChanged` partial methods via source gen

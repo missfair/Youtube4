@@ -1,0 +1,244 @@
+<Window x:Class="YoutubeAutomation.TopicSuggestionWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:materialDesign="http://materialdesigninxaml.net/winfx/xaml/themes"
+        xmlns:local="clr-namespace:YoutubeAutomation"
+        mc:Ignorable="d"
+        Title="AI แนะนำหัวข้อใหม่"
+        Height="800" Width="950"
+        WindowStartupLocation="CenterScreen"
+        Background="{DynamicResource MaterialDesign.Brush.Background}"
+        TextElement.Foreground="{DynamicResource MaterialDesign.Brush.Foreground}"
+        TextElement.FontWeight="Regular"
+        TextElement.FontSize="14"
+        FontFamily="{DynamicResource MaterialDesignFont}"
+        Loaded="Window_Loaded">
+
+    <Window.Resources>
+        <BooleanToVisibilityConverter x:Key="BooleanToVisibilityConverter"/>
+    </Window.Resources>
+
+    <materialDesign:DialogHost SnackbarMessageQueue="{Binding SnackbarQueue}">
+        <Grid Margin="16">
+            <Grid.RowDefinitions>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="*"/>
+                <RowDefinition Height="Auto"/>
+                <RowDefinition Height="Auto"/>
+            </Grid.RowDefinitions>
+
+            <!-- Header -->
+            <materialDesign:Card Grid.Row="0" Margin="0,0,0,16" Padding="16">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <materialDesign:PackIcon Kind="Lightbulb" Width="32" Height="32"
+                                            VerticalAlignment="Center" Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                    <TextBlock Grid.Column="1" Text="AI แนะนำหัวข้อใหม่"
+                              Style="{StaticResource MaterialDesignHeadline5TextBlock}"
+                              Margin="12,0,0,0" VerticalAlignment="Center"/>
+
+                    <ComboBox Grid.Column="2" Width="200"
+                              ItemsSource="{Binding AvailableCategories}"
+                              SelectedItem="{Binding SelectedCategory}"
+                              materialDesign:HintAssist.Hint="เลือกหมวดหมู่"
+                              Style="{StaticResource MaterialDesignOutlinedComboBox}">
+                        <ComboBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding DisplayName}"/>
+                            </DataTemplate>
+                        </ComboBox.ItemTemplate>
+                    </ComboBox>
+                </Grid>
+            </materialDesign:Card>
+
+            <!-- History Section -->
+            <materialDesign:Card Grid.Row="1" Margin="0,0,0,16" Padding="16">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="*"/>
+                            <ColumnDefinition Width="Auto"/>
+                        </Grid.ColumnDefinitions>
+
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon Kind="History" Width="20" Height="20" VerticalAlignment="Center"/>
+                            <TextBlock Text="ประวัติหัวข้อที่เคยทำ" FontWeight="Bold" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                            <Border Background="{DynamicResource PrimaryHueLightBrush}" CornerRadius="10"
+                                   Padding="8,2" Margin="8,0,0,0">
+                                <TextBlock Text="{Binding HistoryCount}" FontWeight="Bold" FontSize="12"/>
+                            </Border>
+                        </StackPanel>
+
+                        <StackPanel Grid.Column="1" Orientation="Horizontal">
+                            <Button Command="{Binding ToggleHistoryCommand}"
+                                   Style="{StaticResource MaterialDesignIconButton}"
+                                   ToolTip="แสดง/ซ่อน รายการ">
+                                <materialDesign:PackIcon Kind="Eye"/>
+                            </Button>
+                            <Button Command="{Binding RescanFoldersCommand}"
+                                   Style="{StaticResource MaterialDesignIconButton}"
+                                   ToolTip="สแกนโฟลเดอร์ใหม่">
+                                <materialDesign:PackIcon Kind="Refresh"/>
+                            </Button>
+                        </StackPanel>
+                    </Grid>
+
+                    <ListBox ItemsSource="{Binding HistoryTopics}" MaxHeight="150" Margin="0,8,0,0"
+                            Visibility="{Binding ShowHistory, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <ListBox.ItemTemplate>
+                            <DataTemplate>
+                                <TextBlock Text="{Binding}" FontSize="12" TextWrapping="Wrap"/>
+                            </DataTemplate>
+                        </ListBox.ItemTemplate>
+                    </ListBox>
+                </StackPanel>
+            </materialDesign:Card>
+
+            <!-- Suggestions Section -->
+            <materialDesign:Card Grid.Row="2" Padding="16">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <StackPanel>
+                        <StackPanel Orientation="Horizontal" Margin="0,0,0,16">
+                            <materialDesign:PackIcon Kind="Brain" Width="24" Height="24" VerticalAlignment="Center"/>
+                            <TextBlock Text="หัวข้อที่ AI แนะนำ" FontWeight="Bold" FontSize="16" Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        </StackPanel>
+
+                        <Button Command="{Binding GenerateSuggestionsCommand}"
+                               Style="{StaticResource MaterialDesignRaisedButton}"
+                               Width="200" Height="40">
+                            <StackPanel Orientation="Horizontal">
+                                <materialDesign:PackIcon Kind="Creation" VerticalAlignment="Center"/>
+                                <TextBlock Text="สร้างหัวข้อใหม่" Margin="8,0,0,0" FontWeight="Bold"/>
+                            </StackPanel>
+                        </Button>
+                    </StackPanel>
+
+                    <!-- Suggestions List -->
+                    <ScrollViewer Grid.Row="1" Margin="0,16,0,0" VerticalScrollBarVisibility="Auto">
+                        <ItemsControl ItemsSource="{Binding SuggestedTopics}">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <materialDesign:Card Margin="0,0,0,12" Padding="16">
+                                        <Grid>
+                                            <Grid.RowDefinitions>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                                <RowDefinition Height="Auto"/>
+                                            </Grid.RowDefinitions>
+
+                                            <!-- Topic Text -->
+                                            <TextBlock Text="{Binding Topic}" FontSize="16" FontWeight="Medium"
+                                                      TextWrapping="Wrap" Margin="0,0,0,4"/>
+
+                                            <!-- Category Badge -->
+                                            <Border Grid.Row="1" Background="{DynamicResource PrimaryHueLightBrush}"
+                                                   CornerRadius="10" Padding="8,2" HorizontalAlignment="Left" Margin="0,0,0,8">
+                                                <TextBlock Text="{Binding Category.DisplayName}" FontSize="11" FontWeight="Bold"/>
+                                            </Border>
+
+                                            <!-- Action Buttons -->
+                                            <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right">
+                                                <!-- Copy Button -->
+                                                <Button Command="{Binding DataContext.CopyTopicToClipboardCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                       CommandParameter="{Binding}"
+                                                       Style="{StaticResource MaterialDesignIconButton}"
+                                                       ToolTip="คัดลอก"
+                                                       Margin="0,0,8,0">
+                                                    <materialDesign:PackIcon Kind="ContentCopy"/>
+                                                </Button>
+
+                                                <!-- Use in MainWindow Button -->
+                                                <Button Command="{Binding DataContext.UseInMainWindowCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                       CommandParameter="{Binding}"
+                                                       Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                       ToolTip="ใช้หัวข้อนี้ใน MainWindow"
+                                                       Margin="0,0,8,0"
+                                                       Padding="12,4">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <materialDesign:PackIcon Kind="FileDocument" VerticalAlignment="Center" Width="18" Height="18"/>
+                                                        <TextBlock Text="ใช้ใน MainWindow" Margin="6,0,0,0" FontSize="12"/>
+                                                    </StackPanel>
+                                                </Button>
+
+                                                <!-- Use in Multi-Image Button -->
+                                                <Button Command="{Binding DataContext.UseInMultiImageCommand, RelativeSource={RelativeSource AncestorType=Window}}"
+                                                       CommandParameter="{Binding}"
+                                                       Style="{StaticResource MaterialDesignRaisedButton}"
+                                                       ToolTip="เปิด Multi-Image พร้อมหัวข้อนี้"
+                                                       Padding="12,4">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <materialDesign:PackIcon Kind="ImageMultiple" VerticalAlignment="Center" Width="18" Height="18"/>
+                                                        <TextBlock Text="ใช้ใน Multi-Image" Margin="6,0,0,0" FontSize="12"/>
+                                                    </StackPanel>
+                                                </Button>
+                                            </StackPanel>
+                                        </Grid>
+                                    </materialDesign:Card>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+                    </ScrollViewer>
+
+                    <!-- Empty State -->
+                    <StackPanel Grid.Row="1" VerticalAlignment="Center" HorizontalAlignment="Center">
+                        <StackPanel.Style>
+                            <Style TargetType="StackPanel">
+                                <Setter Property="Visibility" Value="Collapsed"/>
+                                <Style.Triggers>
+                                    <DataTrigger Binding="{Binding HasSuggestedTopics}" Value="False">
+                                        <Setter Property="Visibility" Value="Visible"/>
+                                    </DataTrigger>
+                                </Style.Triggers>
+                            </Style>
+                        </StackPanel.Style>
+                        <materialDesign:PackIcon Kind="EmoticonSad" Width="64" Height="64"
+                                                Foreground="{DynamicResource MaterialDesign.Brush.TextBox.HoverBackground}"
+                                                HorizontalAlignment="Center"/>
+                        <TextBlock Text="กดปุ่ม 'สร้างหัวข้อใหม่' เพื่อให้ AI แนะนำหัวข้อ"
+                                  Foreground="{DynamicResource MaterialDesign.Brush.TextBox.HoverBackground}"
+                                  HorizontalAlignment="Center" Margin="0,8,0,0"/>
+                    </StackPanel>
+                </Grid>
+            </materialDesign:Card>
+
+            <!-- Progress Bar -->
+            <ProgressBar Grid.Row="3" Height="4" Margin="0,8,0,0"
+                        Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
+                        Value="{Binding CurrentProgress}" Maximum="100"/>
+
+            <!-- Status Bar -->
+            <materialDesign:Card Grid.Row="4" Margin="0,8,0,0" Padding="12">
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock Text="{Binding StatusMessage}" VerticalAlignment="Center"/>
+
+                    <Button Grid.Column="1" Command="{Binding CancelProcessingCommand}"
+                           Style="{StaticResource MaterialDesignOutlinedButton}"
+                           Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon Kind="Cancel" VerticalAlignment="Center"/>
+                            <TextBlock Text="ยกเลิก" Margin="4,0,0,0"/>
+                        </StackPanel>
+                    </Button>
+                </Grid>
+            </materialDesign:Card>
+        </Grid>
+    </materialDesign:DialogHost>
+</Window>

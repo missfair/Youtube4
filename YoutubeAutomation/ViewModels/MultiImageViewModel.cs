@@ -25,10 +25,20 @@ public partial class MultiImageViewModel : ObservableObject
     private readonly IStableDiffusionService _sdService;
     private readonly IDocumentService _documentService;
     private readonly ProjectSettings _settings;
+    private readonly IVideoHistoryService _historyService;
 
     private CancellationTokenSource? _processingCts;
     private readonly SemaphoreSlim _sdSemaphore = new(1, 1);
     private bool _isRunAll; // true when RunAll controls the pipeline
+
+    // Pipeline timer infrastructure
+    private DateTime _pipelineStartTime;
+    private CancellationTokenSource? _pipelineTimerCts;
+    private Task? _pipelineTimerTask;
+    private readonly List<(string Name, TimeSpan Duration)> _pipelineStepTimings = new();
+    private DateTime _currentStepStartTime;
+    private int _pipelineTotalSteps;
+    private int _pipelineCurrentStep;
 
     // Audio playback (narration preview)
     private WaveOutEvent? _waveOut;
@@ -71,7 +81,19 @@ public partial class MultiImageViewModel : ObservableObject
     [ObservableProperty] private bool isBgmPreviewPlaying;
     [ObservableProperty] private BgmTrackDisplayItem? selectedBgmTrack;
     [ObservableProperty] private ContentCategory selectedCategory = ContentCategoryRegistry.Animal;
+    private ContentCategory _previousCategory = ContentCategoryRegistry.Animal;
     [ObservableProperty] private bool isCategoryLocked;
+    [ObservableProperty] private string coverImagePath = "";
+    [ObservableProperty] private string coverImageForYouTubePath = "";
+    [ObservableProperty] private string coverImagePrompt = "";
+
+    // Pipeline timer (visible during RunAll / AutoFromImages only)
+    [ObservableProperty] private bool isPipelineRunning;
+    [ObservableProperty] private string pipelineElapsedText = "";
+    [ObservableProperty] private string pipelineStepLabel = "";
+    [ObservableProperty] private string pipelineCompletedSteps = "";
+    [ObservableProperty] private string pipelineSummary = "";
+    [ObservableProperty] private bool isPipelineComplete;
 
     public ObservableCollection<ContentCategory> AvailableCategories { get; } = new(ContentCategoryRegistry.All);
 
@@ -105,6 +127,29 @@ public partial class MultiImageViewModel : ObservableObject
     public bool ShowSdControls => !UseCloudImageGen;
     public bool ShowCloudControls => UseCloudImageGen;
 
+    partial void OnCoverImagePathChanged(string value)
+    {
+        // Auto-create YouTube-ready cover (≤ 2MB) whenever cover image changes
+        if (!string.IsNullOrWhiteSpace(value) && File.Exists(value))
+        {
+            try
+            {
+                var outputFolder = GetOutputFolder();
+                CoverImageForYouTubePath = CompressImageIfNeeded(value, outputFolder, "cover_youtube.jpg");
+                AppLogger.Log($"YouTube cover ready: {CoverImageForYouTubePath} (original: {new FileInfo(value).Length / 1024}KB)");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.LogError(ex, "Failed to create YouTube cover");
+                CoverImageForYouTubePath = value; // fallback to original
+            }
+        }
+        else
+        {
+            CoverImageForYouTubePath = "";
+        }
+    }
+
     partial void OnUseCloudImageGenChanged(bool value)
     {
         if (!_isRestoringState)
@@ -127,8 +172,54 @@ public partial class MultiImageViewModel : ObservableObject
 
     partial void OnSelectedCategoryChanged(ContentCategory value)
     {
-        if (_isRestoringState) return;
+        if (_isRestoringState)
+        {
+            _previousCategory = value;
+            return;
+        }
+
         IsRealisticStyle = value.DefaultRealisticStyle;
+
+        // Warn if changing category when content exists (style mismatch)
+        bool hasContent = Parts.Count > 0 && Parts.Any(p => p.Scenes.Count > 0);
+        bool hasCover = !string.IsNullOrWhiteSpace(CoverImagePath) && File.Exists(CoverImagePath);
+
+        if (hasContent || hasCover)
+        {
+            var details = new System.Text.StringBuilder("คุณมี");
+            if (hasContent) details.Append("บทและภาพซีน");
+            if (hasContent && hasCover) details.Append("และ");
+            if (hasCover) details.Append("ภาพปก");
+            details.Append("อยู่แล้ว\n\nต้องการเปลี่ยนหมวดหมู่หรือไม่?\n(ภาพปกจะถูกล้างเพื่อสร้างใหม่ตามหมวดหมู่)");
+
+            var result = MessageBox.Show(details.ToString(), "ยืนยันเปลี่ยนหมวดหมู่",
+                MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+            if (result != MessageBoxResult.Yes)
+            {
+                // Revert to previous category
+                _isRestoringState = true;
+                SelectedCategory = _previousCategory;
+                IsRealisticStyle = _previousCategory.DefaultRealisticStyle;
+                _isRestoringState = false;
+                AppLogger.Log($"Category change cancelled, reverted to '{_previousCategory.DisplayName}'");
+                return;
+            }
+
+            AppLogger.Log($"Category changed to '{value.DisplayName}' with existing content - user confirmed");
+
+            // Clear cover so RunAll will regenerate with new category style
+            if (hasCover)
+            {
+                CoverImagePath = "";
+                CoverImagePrompt = "";
+                ReferenceImagePath = "";
+                AppLogger.Log("Category changed: cleared cover image for regeneration");
+            }
+        }
+
+        _previousCategory = value;
+
         // Auto-set BGM to category default
         var defaultTrack = BgmLibrary.GetTrackPath(value.DefaultBgmMood);
         if (defaultTrack != null)
@@ -207,7 +298,8 @@ public partial class MultiImageViewModel : ObservableObject
         IFfmpegService ffmpegService,
         IStableDiffusionService sdService,
         IDocumentService documentService,
-        ProjectSettings settings)
+        ProjectSettings settings,
+        IVideoHistoryService historyService)
     {
         _openRouterService = openRouterService;
         _googleTtsService = googleTtsService;
@@ -215,6 +307,7 @@ public partial class MultiImageViewModel : ObservableObject
         _sdService = sdService;
         _documentService = documentService;
         _settings = settings;
+        _historyService = historyService;
     }
 
     public void Initialize(string topic, int epNumber, string? coverImagePath = null, ContentCategory? category = null)
@@ -239,12 +332,21 @@ public partial class MultiImageViewModel : ObservableObject
         else if (epNumber != _settings.LastEpisodeNumber && _settings.LastEpisodeNumber > 0)
         {
             // Fallback: try the last EP number used in MultiImage
+            var originalEp = EpisodeNumber;
             EpisodeNumber = _settings.LastEpisodeNumber;
+
+            AppLogger.Log($"Initialize: No state for EP{originalEp}, trying fallback to LastEpisodeNumber={EpisodeNumber}");
+
             stateLoaded = TryLoadState();
             if (stateLoaded)
             {
                 UpdateStepCompletion();
                 SnackbarQueue.Enqueue($"โหลดโปรเจกต์ EP{EpisodeNumber} สำเร็จ (จาก session ก่อนหน้า)");
+                AppLogger.Log($"Initialize: Fallback successful, loaded EP{EpisodeNumber} with topic '{TopicText}'");
+            }
+            else
+            {
+                AppLogger.Log($"Initialize: Fallback failed, no state found for EP{EpisodeNumber}");
             }
         }
 
@@ -431,7 +533,7 @@ public partial class MultiImageViewModel : ObservableObject
                     var state = MultiImageState.Load(folder);
                     if (state != null && state.HasData())
                     {
-                        RestoreFromState(state);
+                        RestoreFromState(state, folder);
                         UpdateStepCompletion();
                         SnackbarQueue.Enqueue($"โหลด EP{epNum} สำเร็จ");
                     }
@@ -546,6 +648,8 @@ public partial class MultiImageViewModel : ObservableObject
         {
             if (ownsCts)
             {
+                IsPipelineRunning = false;
+                IsPipelineComplete = false;
                 IsProcessing = true;
                 CurrentProgress = 0;
                 _processingCts?.Cancel();
@@ -648,12 +752,15 @@ public partial class MultiImageViewModel : ObservableObject
     }
 
     // === Step 2: Generate Images ===
+    private const string CloudRealisticPrefix = "Generate a photorealistic image. IMPORTANT: This must look like a real photograph taken by a camera, NOT a cartoon, NOT an illustration, NOT a drawing, NOT an animation. Use realistic lighting, real textures, and natural colors.\n\n";
+
     private async Task<byte[]> GenerateSceneImageAsync(string scenePrompt, string? refImagePath, CancellationToken token)
     {
         if (UseCloudImageGen)
         {
+            var cloudPrompt = CloudRealisticPrefix + scenePrompt;
             return await _googleTtsService.GenerateImageAsync(
-                scenePrompt, SelectedCloudModel, null, "16:9", token);
+                cloudPrompt, SelectedCloudModel, null, "16:9", token);
         }
 
         // SD Local
@@ -673,7 +780,8 @@ public partial class MultiImageViewModel : ObservableObject
     {
         if (AllScenes.Count == 0)
         {
-            MessageBox.Show("กรุณาสร้างบทก่อน", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+            if (!_isRunAll)
+                MessageBox.Show("กรุณาสร้างบทก่อน", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -682,6 +790,8 @@ public partial class MultiImageViewModel : ObservableObject
         {
             if (ownsCts)
             {
+                IsPipelineRunning = false;
+                IsPipelineComplete = false;
                 IsProcessing = true;
                 CurrentProgress = 0;
                 _processingCts?.Cancel();
@@ -692,8 +802,9 @@ public partial class MultiImageViewModel : ObservableObject
             // Pre-check: cloud requires API key
             if (UseCloudImageGen && string.IsNullOrWhiteSpace(_settings.GoogleApiKey))
             {
-                MessageBox.Show("กรุณาตั้งค่า Google API Key ก่อนใช้ Cloud Image Gen",
-                    "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+                if (!_isRunAll)
+                    MessageBox.Show("กรุณาตั้งค่า Google API Key ก่อนใช้ Cloud Image Gen",
+                        "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
                 return;
             }
 
@@ -728,35 +839,21 @@ public partial class MultiImageViewModel : ObservableObject
                     continue;
                 }
 
-                // Scene 0 always uses cover/reference image (no generation needed)
-                if (i == 0 &&
-                    !string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
+                // === BOOKEND: Scene แรก & สุดท้าย ใช้ภาพปก ===
+                if ((i == 0 || i == scenes.Count - 1)
+                    && !string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
                 {
-                    StatusMessage = $"ใช้ภาพปกเป็น scene แรก...";
-                    var imagePath = Path.Combine(outputFolder, "scene_000.png");
-                    File.Copy(ReferenceImagePath, imagePath, overwrite: true);
-                    scene.ImagePath = imagePath;
-                    previousSceneImagePath = imagePath;
-                    ImagesGenerated++;
-                    CurrentProgress = (int)(100.0 * 1 / scenes.Count);
-                    OnPropertyChanged(nameof(AllScenes));
-                    AppLogger.Log("Scene 1: using cover image (no generation)");
-                    continue;
-                }
-
-                // Last scene uses cover/reference image as bookend
-                if (i == scenes.Count - 1 && scenes.Count > 1 &&
-                    !string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
-                {
-                    StatusMessage = $"ใช้ภาพปกเป็น scene สุดท้าย (bookend)...";
+                    var label = i == 0 ? "แรก" : "สุดท้าย (bookend)";
+                    StatusMessage = $"ใช้ภาพปกเป็น scene {label}...";
                     var imagePath = Path.Combine(outputFolder, $"scene_{i:D3}.png");
                     File.Copy(ReferenceImagePath, imagePath, overwrite: true);
+                    scene.ImagePath = null; // Force PropertyChanged
                     scene.ImagePath = imagePath;
                     previousSceneImagePath = imagePath;
                     ImagesGenerated++;
+                    AppLogger.Log($"Scene {i + 1}/{scenes.Count} = cover image ({label})");
                     CurrentProgress = (int)(100.0 * (i + 1) / scenes.Count);
                     OnPropertyChanged(nameof(AllScenes));
-                    AppLogger.Log($"Scene {i + 1}: using cover image as bookend (no generation)");
                     continue;
                 }
 
@@ -764,49 +861,65 @@ public partial class MultiImageViewModel : ObservableObject
                     ? $"กำลังสร้างภาพ {i + 1}/{scenes.Count} (ต่อเนื่องจาก scene ก่อนหน้า)..."
                     : $"กำลังสร้างภาพ {i + 1}/{scenes.Count}...";
 
+                const int maxRetries = 3;
                 await _sdSemaphore.WaitAsync(_processingCts.Token);
                 try
                 {
-                    byte[] imageBytes;
-
-                    if (UseSceneChaining && !string.IsNullOrWhiteSpace(previousSceneImagePath) && File.Exists(previousSceneImagePath))
+                    for (int attempt = 1; attempt <= maxRetries; attempt++)
                     {
-                        // Scene Chaining: use previous scene as reference
-                        var chainPrompt = UseCloudImageGen
-                            ? $"Based on the reference image style, create the next scene: {scene.ImagePrompt}"
-                            : ChainingConsistencyPrefix + scene.ImagePrompt;
-                        imageBytes = await GenerateSceneImageAsync(chainPrompt, previousSceneImagePath, _processingCts.Token);
-                    }
-                    else
-                    {
-                        // Normal mode: use cover/reference image or txt2img
-                        imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, ReferenceImagePath, _processingCts.Token);
-                    }
+                        try
+                        {
+                            byte[] imageBytes;
 
-                    var imagePath = Path.Combine(outputFolder, $"scene_{i:D3}.png");
-                    await File.WriteAllBytesAsync(imagePath, imageBytes, _processingCts.Token);
-                    scene.ImagePath = null; // Force PropertyChanged even if path is same
-                    scene.ImagePath = imagePath;
-                    previousSceneImagePath = imagePath;
-                    ImagesGenerated++;
-                    consecutiveFailures = 0; // Reset on success
-                    AppLogger.Log($"Scene {i + 1}/{scenes.Count} OK ({imageBytes.Length / 1024}KB)");
+                            if (UseSceneChaining && !string.IsNullOrWhiteSpace(previousSceneImagePath) && File.Exists(previousSceneImagePath))
+                            {
+                                // Scene Chaining: use previous scene as reference
+                                var chainPrompt = UseCloudImageGen
+                                    ? CloudRealisticPrefix + scene.ImagePrompt
+                                    : ChainingConsistencyPrefix + scene.ImagePrompt;
+                                imageBytes = await GenerateSceneImageAsync(chainPrompt, previousSceneImagePath, _processingCts.Token);
+                            }
+                            else
+                            {
+                                // Normal mode: txt2img (no reference - each scene independent)
+                                imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, null, _processingCts.Token);
+                            }
+
+                            var imagePath = Path.Combine(outputFolder, $"scene_{i:D3}.png");
+                            await File.WriteAllBytesAsync(imagePath, imageBytes, _processingCts.Token);
+                            scene.ImagePath = null; // Force PropertyChanged even if path is same
+                            scene.ImagePath = imagePath;
+                            previousSceneImagePath = imagePath;
+                            ImagesGenerated++;
+                            consecutiveFailures = 0; // Reset on success
+                            AppLogger.Log($"Scene {i + 1}/{scenes.Count} OK ({imageBytes.Length / 1024}KB)");
+                            break; // Success → exit retry loop
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex) when (attempt < maxRetries)
+                        {
+                            AppLogger.Log($"Scene {i + 1}/{scenes.Count} retry {attempt}/{maxRetries}: {ex.Message}");
+                            StatusMessage = $"ภาพ {i + 1} retry ({attempt}/{maxRetries}): {ex.Message}";
+                            await Task.Delay(2000 * attempt, _processingCts.Token); // 2s, 4s backoff
+                        }
+                        catch (Exception ex)
+                        {
+                            // Final attempt failed
+                            consecutiveFailures++;
+                            AppLogger.LogError(ex, $"Scene {i + 1}/{scenes.Count} failed (consecutive={consecutiveFailures})");
+                            StatusMessage = $"ภาพ {i + 1} ล้มเหลว ({consecutiveFailures}/{maxConsecutiveFailures}): {ex.Message}";
+
+                            if (consecutiveFailures >= maxConsecutiveFailures)
+                            {
+                                throw new Exception(
+                                    $"สร้างภาพล้มเหลวติดต่อกัน {maxConsecutiveFailures} ครั้ง — หยุดการทำงาน\n\n" +
+                                    $"สร้างได้: {ImagesGenerated}/{TotalImages} ภาพ\n" +
+                                    $"Error ล่าสุด: {ex.Message}");
+                            }
+                        }
+                    }
                 }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    consecutiveFailures++;
-                    AppLogger.LogError(ex, $"Scene {i + 1}/{scenes.Count} failed (consecutive={consecutiveFailures})");
-                    StatusMessage = $"ภาพ {i + 1} ล้มเหลว ({consecutiveFailures}/{maxConsecutiveFailures}): {ex.Message}";
-
-                    if (consecutiveFailures >= maxConsecutiveFailures)
-                    {
-                        throw new Exception(
-                            $"สร้างภาพล้มเหลวติดต่อกัน {maxConsecutiveFailures} ครั้ง — หยุดการทำงาน\n\n" +
-                            $"สร้างได้: {ImagesGenerated}/{TotalImages} ภาพ\n" +
-                            $"Error ล่าสุด: {ex.Message}");
-                    }
-                }
                 finally
                 {
                     _sdSemaphore.Release();
@@ -860,6 +973,8 @@ public partial class MultiImageViewModel : ObservableObject
 
         try
         {
+            IsPipelineRunning = false;
+            IsPipelineComplete = false;
             IsProcessing = true;
             CurrentProgress = 0;
             _processingCts?.Cancel();
@@ -883,54 +998,38 @@ public partial class MultiImageViewModel : ObservableObject
             var scenes = AllScenes;
             TotalImages = scenes.Count;
 
-            // Scene 0 always uses cover/reference image (no generation needed)
-            if (scenes.Count > 0
-                && (string.IsNullOrWhiteSpace(scenes[0].ImagePath) || !File.Exists(scenes[0].ImagePath))
-                && !string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
-            {
-                try
-                {
-                    var imagePath = Path.Combine(outputFolder, "scene_000.png");
-                    File.Copy(ReferenceImagePath, imagePath, overwrite: true);
-                    scenes[0].ImagePath = imagePath;
-                    OnPropertyChanged(nameof(AllScenes));
-                    AppLogger.Log("Scene 1: using cover image (no generation) [parallel]");
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.LogError(ex, "Failed to copy cover image for scene 0 [parallel]");
-                }
-            }
-
-            // Last scene uses cover/reference image as bookend
-            var lastIdx = scenes.Count - 1;
-            if (scenes.Count > 1
-                && (string.IsNullOrWhiteSpace(scenes[lastIdx].ImagePath) || !File.Exists(scenes[lastIdx].ImagePath))
-                && !string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
-            {
-                try
-                {
-                    var imagePath = Path.Combine(outputFolder, $"scene_{lastIdx:D3}.png");
-                    File.Copy(ReferenceImagePath, imagePath, overwrite: true);
-                    scenes[lastIdx].ImagePath = imagePath;
-                    OnPropertyChanged(nameof(AllScenes));
-                    AppLogger.Log($"Scene {lastIdx + 1}: using cover image as bookend [parallel]");
-                }
-                catch (Exception ex)
-                {
-                    AppLogger.LogError(ex, "Failed to copy cover image for last scene bookend [parallel]");
-                }
-            }
-
             // Count already-generated images
             var alreadyDone = scenes.Count(s => !string.IsNullOrWhiteSpace(s.ImagePath) && File.Exists(s.ImagePath));
             ImagesGenerated = alreadyDone;
 
-            // Collect pending scenes (scene 0 already handled above)
+            // Collect pending scenes
             var pending = scenes
                 .Select((s, i) => (scene: s, index: i))
                 .Where(x => string.IsNullOrWhiteSpace(x.scene.ImagePath) || !File.Exists(x.scene.ImagePath))
                 .ToList();
+
+            // === BOOKEND: Handle Scene แรก & สุดท้ายด้วยภาพปก ===
+            if (!string.IsNullOrWhiteSpace(ReferenceImagePath) && File.Exists(ReferenceImagePath))
+            {
+                var bookendIndices = new HashSet<int> { 0, scenes.Count - 1 };
+                var bookends = pending.Where(x => bookendIndices.Contains(x.index)).ToList();
+
+                foreach (var x in bookends)
+                {
+                    var label = x.index == 0 ? "แรก" : "สุดท้าย (bookend)";
+                    var imagePath = Path.Combine(outputFolder, $"scene_{x.index:D3}.png");
+                    File.Copy(ReferenceImagePath, imagePath, overwrite: true);
+                    x.scene.ImagePath = null; // Force PropertyChanged
+                    x.scene.ImagePath = imagePath;
+                    ImagesGenerated++;
+                    AppLogger.Log($"Scene {x.index + 1}/{scenes.Count} = cover image ({label})");
+                }
+
+                // Remove bookends from pending so they don't get regenerated
+                pending = pending.Where(x => !bookendIndices.Contains(x.index)).ToList();
+                CurrentProgress = (int)(100.0 * ImagesGenerated / TotalImages);
+                OnPropertyChanged(nameof(AllScenes));
+            }
 
             if (pending.Count == 0)
             {
@@ -948,6 +1047,7 @@ public partial class MultiImageViewModel : ObservableObject
 
             StatusMessage = $"กำลังสร้างภาพ {pending.Count} ภาพ (อิสระ, {maxConcurrency} พร้อมกัน)...";
 
+            const int maxRetries = 3;
             var tasks = pending.Select(x => Task.Run(async () =>
             {
                 await concurrency.WaitAsync(token);
@@ -957,42 +1057,61 @@ public partial class MultiImageViewModel : ObservableObject
                     if (Volatile.Read(ref failureCount) >= 3)
                         return;
 
-                    byte[] imageBytes;
-                    if (UseCloudImageGen)
+                    for (int attempt = 1; attempt <= maxRetries; attempt++)
                     {
-                        imageBytes = await _googleTtsService.GenerateImageAsync(
-                            x.scene.ImagePrompt, SelectedCloudModel, null, "16:9", token);
-                    }
-                    else
-                    {
-                        var fullPrompt = StylePrefix + x.scene.ImagePrompt;
-                        imageBytes = await _sdService.GenerateImageAsync(
-                            fullPrompt, NegativePrompt, ImageWidth, ImageHeight, token);
-                    }
+                        try
+                        {
+                            byte[] imageBytes;
+                            if (UseCloudImageGen)
+                            {
+                                var cloudPrompt = CloudRealisticPrefix + x.scene.ImagePrompt;
+                                imageBytes = await _googleTtsService.GenerateImageAsync(
+                                    cloudPrompt, SelectedCloudModel, null, "16:9", token);
+                            }
+                            else
+                            {
+                                var fullPrompt = StylePrefix + x.scene.ImagePrompt;
+                                imageBytes = await _sdService.GenerateImageAsync(
+                                    fullPrompt, NegativePrompt, ImageWidth, ImageHeight, token);
+                            }
 
-                    var imagePath = Path.Combine(outputFolder, $"scene_{x.index:D3}.png");
-                    await File.WriteAllBytesAsync(imagePath, imageBytes, token);
+                            var imagePath = Path.Combine(outputFolder, $"scene_{x.index:D3}.png");
+                            await File.WriteAllBytesAsync(imagePath, imageBytes, token);
 
-                    dispatcher.Invoke(() =>
-                    {
-                        x.scene.ImagePath = null; // Force PropertyChanged even if path is same
-                        x.scene.ImagePath = imagePath;
-                        ImagesGenerated++;
-                        CurrentProgress = (int)(100.0 * ImagesGenerated / TotalImages);
-                        StatusMessage = $"สร้างภาพแล้ว {ImagesGenerated}/{TotalImages} (อิสระ)...";
-                        OnPropertyChanged(nameof(AllScenes));
-                    });
-                    Interlocked.Exchange(ref failureCount, 0); // Reset on success
+                            dispatcher.Invoke(() =>
+                            {
+                                x.scene.ImagePath = null; // Force PropertyChanged even if path is same
+                                x.scene.ImagePath = imagePath;
+                                ImagesGenerated++;
+                                CurrentProgress = (int)(100.0 * ImagesGenerated / TotalImages);
+                                StatusMessage = $"สร้างภาพแล้ว {ImagesGenerated}/{TotalImages} (อิสระ)...";
+                                OnPropertyChanged(nameof(AllScenes));
+                            });
+                            Interlocked.Exchange(ref failureCount, 0); // Reset on success
+                            break; // Success → exit retry loop
+                        }
+                        catch (OperationCanceledException) { throw; }
+                        catch (Exception ex) when (attempt < maxRetries)
+                        {
+                            dispatcher.Invoke(() =>
+                            {
+                                StatusMessage = $"ภาพ {x.index + 1} retry ({attempt}/{maxRetries}): {ex.Message}";
+                            });
+                            AppLogger.Log($"Scene {x.index + 1} retry {attempt}/{maxRetries}: {ex.Message}");
+                            await Task.Delay(2000 * attempt, token); // 2s, 4s backoff
+                        }
+                        catch (Exception ex)
+                        {
+                            // Final attempt failed
+                            var failures = Interlocked.Increment(ref failureCount);
+                            dispatcher.Invoke(() =>
+                            {
+                                StatusMessage = $"ภาพ {x.index + 1} ล้มเหลว ({failures}/3): {ex.Message}";
+                            });
+                        }
+                    }
                 }
                 catch (OperationCanceledException) { throw; }
-                catch (Exception ex)
-                {
-                    var failures = Interlocked.Increment(ref failureCount);
-                    dispatcher.Invoke(() =>
-                    {
-                        StatusMessage = $"ภาพ {x.index + 1} ล้มเหลว ({failures}/3): {ex.Message}";
-                    });
-                }
                 finally
                 {
                     concurrency.Release();
@@ -1101,12 +1220,14 @@ public partial class MultiImageViewModel : ObservableObject
                 }
                 else
                 {
-                    imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, ReferenceImagePath, _processingCts.Token);
+                    // Normal mode: txt2img (no reference - independent generation)
+                    imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, null, _processingCts.Token);
                 }
             }
             else
             {
-                imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, ReferenceImagePath, _processingCts.Token);
+                // Manual mode: txt2img (no reference - independent generation)
+                imageBytes = await GenerateSceneImageAsync(scene.ImagePrompt, null, _processingCts.Token);
             }
 
             var imgPath = Path.Combine(outputFolder, $"scene_{scene.SceneIndex:D3}.png");
@@ -1369,7 +1490,8 @@ public partial class MultiImageViewModel : ObservableObject
     {
         if (Parts.Count == 0)
         {
-            MessageBox.Show("กรุณาสร้างบทก่อน", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+            if (!_isRunAll)
+                MessageBox.Show("กรุณาสร้างบทก่อน", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -1378,6 +1500,8 @@ public partial class MultiImageViewModel : ObservableObject
         {
             if (ownsCts)
             {
+                IsPipelineRunning = false;
+                IsPipelineComplete = false;
                 IsProcessing = true;
                 _processingCts?.Cancel();
                 _processingCts?.Dispose();
@@ -1385,66 +1509,88 @@ public partial class MultiImageViewModel : ObservableObject
             }
             var outputFolder = GetOutputFolder();
             Directory.CreateDirectory(outputFolder);
+            var token = _processingCts!.Token;
+            var dispatcher = Application.Current.Dispatcher;
 
+            // Collect pending parts
+            var pendingParts = new List<(ScenePart part, int index)>();
             for (int i = 0; i < Parts.Count; i++)
             {
-                _processingCts!.Token.ThrowIfCancellationRequested();
-                var part = Parts[i];
-
-                // Skip if audio already exists
-                if (!string.IsNullOrWhiteSpace(part.AudioPath) && File.Exists(part.AudioPath))
+                if (!string.IsNullOrWhiteSpace(Parts[i].AudioPath) && File.Exists(Parts[i].AudioPath))
                 {
-                    StatusMessage = $"เสียง Part {i + 1} มีอยู่แล้ว - ข้าม";
+                    AppLogger.Log($"Audio Part {i + 1} already exists — skip");
                     continue;
                 }
-
-                var narration = part.GetFullNarrationText();
+                var narration = Parts[i].GetFullNarrationText();
                 if (string.IsNullOrWhiteSpace(narration)) continue;
+                pendingParts.Add((Parts[i], i));
+            }
 
-                var partIndex = i;
-                var startTime = DateTime.Now;
-                var cts = CancellationTokenSource.CreateLinkedTokenSource(_processingCts.Token);
-                Task? timerTask = null;
+            if (pendingParts.Count == 0)
+            {
+                StatusMessage = "เสียงครบทุก part แล้ว";
+                CurrentProgress = 100;
+                UpdateStepCompletion();
+                return;
+            }
+
+            // Shared timer for all parallel TTS calls
+            var startTime = DateTime.Now;
+            var timerCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+            var timerTask = Task.Run(async () =>
+            {
                 try
                 {
-                    timerTask = Task.Run(async () =>
+                    while (!timerCts.Token.IsCancellationRequested)
                     {
-                        try
+                        var elapsed = DateTime.Now - startTime;
+                        dispatcher.Invoke(() =>
                         {
-                            while (!cts.Token.IsCancellationRequested)
-                            {
-                                var elapsed = DateTime.Now - startTime;
-                                Application.Current.Dispatcher.Invoke(() =>
-                                {
-                                    StatusMessage = $"กำลังสร้างเสียง Part {partIndex + 1}/3... ({elapsed:mm\\:ss})";
-                                });
-                                await Task.Delay(1000, cts.Token).ConfigureAwait(false);
-                            }
-                        }
-                        catch { }
-                    }, cts.Token);
-
-                    CurrentProgress = i * 33;
-                    var audioBytes = await _googleTtsService.GenerateAudioAsync(
-                        narration, _settings.TtsVoice, null, _processingCts.Token,
-                        SelectedCategory.TtsVoiceInstruction);
-
-                    cts.Cancel();
-
-                    var audioPath = Path.Combine(outputFolder, $"ep{EpisodeNumber}_{i + 1}.wav");
-                    await File.WriteAllBytesAsync(audioPath, audioBytes);
-
-                    part.AudioPath = audioPath;
-                    part.AudioDurationSeconds = _ffmpegService.GetAudioDuration(audioPath).TotalSeconds;
-                    part.CalculateSceneDurations();
+                            var timerLabel = pendingParts.Count == 1
+                                ? $"Part {pendingParts[0].index + 1}"
+                                : $"{pendingParts.Count} parts พร้อมกัน";
+                            StatusMessage = $"กำลังสร้างเสียง {timerLabel}... ({elapsed:mm\\:ss})";
+                        });
+                        await Task.Delay(1000, timerCts.Token).ConfigureAwait(false);
+                    }
                 }
-                finally
+                catch { }
+            }, timerCts.Token);
+
+            // Fire all parts in parallel
+            int completedCount = 0;
+            var audioTasks = pendingParts.Select(x => Task.Run(async () =>
+            {
+                var narration = x.part.GetFullNarrationText();
+                var audioBytes = await _googleTtsService.GenerateAudioAsync(
+                    narration, _settings.TtsVoice, null, token,
+                    SelectedCategory.TtsVoiceInstruction);
+
+                var audioPath = Path.Combine(outputFolder, $"ep{EpisodeNumber}_{x.index + 1}.wav");
+                await File.WriteAllBytesAsync(audioPath, audioBytes, token);
+
+                dispatcher.Invoke(() =>
                 {
-                    cts.Cancel();
-                    if (timerTask != null)
-                        try { await timerTask.ConfigureAwait(false); } catch { }
-                    cts.Dispose();
-                }
+                    x.part.AudioPath = audioPath;
+                    x.part.AudioDurationSeconds = _ffmpegService.GetAudioDuration(audioPath).TotalSeconds;
+                    x.part.CalculateSceneDurations();
+                    var done = Interlocked.Increment(ref completedCount);
+                    CurrentProgress = (int)(100.0 * done / pendingParts.Count);
+                });
+
+                AppLogger.Log($"Audio Part {x.index + 1} OK ({audioBytes.Length / 1024}KB)");
+            }, token)).ToArray();
+
+            try
+            {
+                await Task.WhenAll(audioTasks);
+            }
+            finally
+            {
+                // Always cleanup timer (even on failure/cancel)
+                timerCts.Cancel();
+                try { await timerTask; } catch { }
+                timerCts.Dispose();
             }
 
             AppLogger.Log("GenerateAllAudio DONE");
@@ -1510,12 +1656,14 @@ public partial class MultiImageViewModel : ObservableObject
 
         if (scenesWithImages.Count == 0)
         {
-            MessageBox.Show("ไม่มีภาพสำหรับสร้างวิดีโอ", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+            if (!_isRunAll)
+                MessageBox.Show("ไม่มีภาพสำหรับสร้างวิดีโอ", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
         if (audioFiles.Count == 0)
         {
-            MessageBox.Show("ไม่มีเสียงสำหรับสร้างวิดีโอ", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+            if (!_isRunAll)
+                MessageBox.Show("ไม่มีเสียงสำหรับสร้างวิดีโอ", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
             return;
         }
 
@@ -1539,6 +1687,8 @@ public partial class MultiImageViewModel : ObservableObject
         {
             if (ownsCts)
             {
+                IsPipelineRunning = false;
+                IsPipelineComplete = false;
                 IsProcessing = true;
                 StatusMessage = "กำลังสร้างวิดีโอ...";
                 CurrentProgress = 0;
@@ -1570,6 +1720,7 @@ public partial class MultiImageViewModel : ObservableObject
             StatusMessage = "สร้างวิดีโอสำเร็จ!";
             CurrentProgress = 100;
             UpdateStepCompletion();
+            SaveTopicToHistory();
 
             // Auto advance to done step
             CurrentStepIndex = 5;
@@ -1585,6 +1736,106 @@ public partial class MultiImageViewModel : ObservableObject
         finally
         {
             if (ownsCts) IsProcessing = false;
+        }
+    }
+
+    // Save topic to history after video completion (fire-and-forget)
+    private void SaveTopicToHistory()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                if (!string.IsNullOrWhiteSpace(TopicText))
+                {
+                    await _historyService.SaveTopicAsync(TopicText);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.LogError(ex, "Failed to save topic to history");
+            }
+        });
+    }
+
+    // === Pipeline Timer ===
+
+    private void StartPipelineTimer(int totalSteps)
+    {
+        _pipelineStepTimings.Clear();
+        _pipelineStartTime = DateTime.Now;
+        _currentStepStartTime = DateTime.Now;
+        _pipelineTotalSteps = totalSteps;
+        _pipelineCurrentStep = 0;
+        IsPipelineRunning = true;
+        IsPipelineComplete = false;
+        PipelineCompletedSteps = "";
+        PipelineSummary = "";
+        PipelineElapsedText = "รวม 00:00";
+
+        _pipelineTimerCts?.Cancel();
+        _pipelineTimerCts?.Dispose();
+        _pipelineTimerCts = CancellationTokenSource.CreateLinkedTokenSource(_processingCts!.Token);
+
+        var cts = _pipelineTimerCts;
+        _pipelineTimerTask = Task.Run(async () =>
+        {
+            try
+            {
+                while (!cts.Token.IsCancellationRequested)
+                {
+                    var elapsed = DateTime.Now - _pipelineStartTime;
+                    Application.Current.Dispatcher.Invoke(() =>
+                    {
+                        PipelineElapsedText = $"รวม {elapsed:mm\\:ss}";
+                    });
+                    await Task.Delay(1000, cts.Token).ConfigureAwait(false);
+                }
+            }
+            catch { }
+        }, cts.Token);
+    }
+
+    private void SetPipelineStep(string stepName)
+    {
+        _pipelineCurrentStep++;
+        _currentStepStartTime = DateTime.Now;
+        PipelineStepLabel = $"ขั้นตอน {_pipelineCurrentStep}/{_pipelineTotalSteps}: {stepName}";
+    }
+
+    private void AdvancePipelineStep(string completedName, string nextName)
+    {
+        var stepDuration = DateTime.Now - _currentStepStartTime;
+        _pipelineStepTimings.Add((completedName, stepDuration));
+
+        PipelineCompletedSteps = string.Join("  |  ",
+            _pipelineStepTimings.Select(s => $"{s.Name} {s.Duration:mm\\:ss} \u2713"));
+
+        SetPipelineStep(nextName);
+    }
+
+    private async Task StopPipelineTimer(bool completed)
+    {
+        _pipelineTimerCts?.Cancel();
+        if (_pipelineTimerTask != null)
+            try { await _pipelineTimerTask; } catch { }
+        _pipelineTimerCts?.Dispose();
+        _pipelineTimerCts = null;
+        _pipelineTimerTask = null;
+
+        var totalElapsed = DateTime.Now - _pipelineStartTime;
+        PipelineElapsedText = $"รวม {totalElapsed:mm\\:ss}";
+
+        if (completed && _pipelineStepTimings.Count > 0)
+        {
+            IsPipelineComplete = true;
+            var breakdown = string.Join("  |  ",
+                _pipelineStepTimings.Select(s => $"{s.Name} {s.Duration:mm\\:ss}"));
+            PipelineSummary = $"เสร็จสมบูรณ์ — รวม {totalElapsed:mm\\:ss}  |  {breakdown}";
+        }
+        else
+        {
+            IsPipelineRunning = false;
         }
     }
 
@@ -1610,6 +1861,7 @@ public partial class MultiImageViewModel : ObservableObject
 
         if (result != MessageBoxResult.Yes) return;
 
+        var pipelineCompleted = false;
         try
         {
             IsProcessing = true;
@@ -1619,6 +1871,10 @@ public partial class MultiImageViewModel : ObservableObject
             _isRunAll = true;
 
             AppLogger.Log("AutoFromImages: starting parallel image+audio generation");
+
+            // Pipeline timer: 2 steps (ภาพ+เสียง → วิดีโอ)
+            StartPipelineTimer(2);
+            SetPipelineStep("ภาพ+เสียง");
 
             // Run image generation and audio generation in parallel
             CurrentStepIndex = 2;
@@ -1692,14 +1948,22 @@ public partial class MultiImageViewModel : ObservableObject
                 return;
             }
 
+            // Pipeline timer: advance to step 2
+            AdvancePipelineStep("ภาพ+เสียง", "วิดีโอ");
+
             // Step 4: Create video
             AppLogger.Log("AutoFromImages: creating video...");
             CurrentStepIndex = 4;
             await CreateVideoAsync();
 
+            // Pipeline timer: record final step
+            _pipelineStepTimings.Add(("วิดีโอ", DateTime.Now - _currentStepStartTime));
+            pipelineCompleted = true;
+
             AppLogger.Log("AutoFromImages: COMPLETE");
             CurrentStepIndex = 5;
             MessageBox.Show("สร้างวิดีโอเสร็จสมบูรณ์!", "สำเร็จ", MessageBoxButton.OK, MessageBoxImage.Information);
+            SaveTopicToHistory();
 
             var folder = GetOutputFolder();
             if (Directory.Exists(folder))
@@ -1718,6 +1982,7 @@ public partial class MultiImageViewModel : ObservableObject
         }
         finally
         {
+            await StopPipelineTimer(pipelineCompleted);
             _isRunAll = false;
             IsProcessing = false;
             System.Windows.Input.CommandManager.InvalidateRequerySuggested();
@@ -1741,6 +2006,7 @@ public partial class MultiImageViewModel : ObservableObject
 
         if (result != MessageBoxResult.Yes) return;
 
+        var pipelineCompleted = false;
         try
         {
             IsProcessing = true;
@@ -1751,10 +2017,152 @@ public partial class MultiImageViewModel : ObservableObject
 
             AppLogger.Log("RunAll: starting full pipeline");
 
+            // ===== Auto-generate cover image if doesn't exist =====
+            var outputFolder = GetOutputFolder();
+            Directory.CreateDirectory(outputFolder);
+            var expectedCoverPath = Path.Combine(outputFolder, $"ปกไทย_ep{EpisodeNumber}.png");
+
+            // Check only if stored CoverImagePath is valid (respect user's manual selection)
+            bool needsCoverImage = string.IsNullOrWhiteSpace(CoverImagePath)
+                                  || !File.Exists(CoverImagePath);
+
+            if (needsCoverImage)
+            {
+                AppLogger.Log("RunAll: Auto-generating cover image (doesn't exist)");
+                StatusMessage = "กำลังสร้างภาพปกอัตโนมัติ...";
+                CurrentProgress = 5;
+
+                try
+                {
+                    // Validate Google API Key
+                    if (string.IsNullOrWhiteSpace(_settings.GoogleApiKey))
+                    {
+                        MessageBox.Show("กรุณาตั้งค่า Google API Key ก่อนรัน RunAll\n\n" +
+                                      "ต้องการ API Key สำหรับสร้างภาพปก\nเปิด Settings → Google API Key (TTS)",
+                                        "ต้องการ API Key", MessageBoxButton.OK, MessageBoxImage.Warning);
+                        return;
+                    }
+
+                    // Get reference image
+                    string? refImagePath = null;
+                    if (!string.IsNullOrEmpty(_settings.ReferenceImagePath) && File.Exists(_settings.ReferenceImagePath))
+                    {
+                        refImagePath = _settings.ReferenceImagePath;
+                    }
+
+                    // Always regenerate prompt based on current topic and category
+                    CoverImagePrompt = GenerateCoverImagePrompt(TopicText, SelectedCategory, refImagePath != null);
+
+                    // Retry loop
+                    byte[]? imageBytes = null;
+                    Exception? lastException = null;
+                    for (int attempt = 1; attempt <= 3; attempt++)
+                    {
+                        try
+                        {
+                            StatusMessage = attempt == 1
+                                ? "กำลังสร้างภาพปก..."
+                                : $"พยายามสร้างภาพปกครั้งที่ {attempt}/3...";
+                            CurrentProgress = 10 + (attempt * 5);
+
+                            imageBytes = await _googleTtsService.GenerateImageAsync(
+                                CoverImagePrompt,
+                                _settings.CloudImageModel,
+                                refImagePath,
+                                "16:9",
+                                _processingCts.Token);
+
+                            CurrentProgress = 25;
+                            break;
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw;
+                        }
+                        catch (Exception ex)
+                        {
+                            lastException = ex;
+                            if (attempt < 3)
+                            {
+                                await Task.Delay(2000, _processingCts.Token);
+                            }
+                        }
+                    }
+
+                    if (imageBytes == null)
+                    {
+                        throw lastException ?? new Exception("ไม่สามารถสร้างภาพปกได้");
+                    }
+
+                    // Save cover image
+                    await File.WriteAllBytesAsync(expectedCoverPath, imageBytes);
+                    CoverImagePath = expectedCoverPath;
+
+                    // Sync ReferenceImagePath to use the newly created cover image
+                    if (File.Exists(expectedCoverPath))
+                    {
+                        ReferenceImagePath = CompressImageIfNeeded(expectedCoverPath, GetScenesFolder());
+                        AppLogger.Log($"RunAll: Synced ReferenceImagePath to cover image: {ReferenceImagePath}");
+                    }
+
+                    SaveState();
+
+                    AppLogger.Log($"RunAll: Cover image auto-generated: {CoverImagePath}");
+                }
+                catch (OperationCanceledException)
+                {
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.LogError(ex, "RunAll: Cover image generation failed");
+                    var continueWithoutCover = MessageBox.Show(
+                        $"ไม่สามารถสร้างภาพปกได้: {ex.Message}\n\n" +
+                        $"ต้องการดำเนินการต่อโดยไม่มีภาพปกหรือไม่?",
+                        "ภาพปกไม่สำเร็จ", MessageBoxButton.YesNo, MessageBoxImage.Warning);
+
+                    if (continueWithoutCover != MessageBoxResult.Yes)
+                    {
+                        StatusMessage = "ยกเลิก RunAll - ต้องมีภาพปก";
+                        return;
+                    }
+                }
+            }
+            else
+            {
+                AppLogger.Log($"RunAll: Cover image already exists: {CoverImagePath}");
+
+                // CRITICAL FIX: Also sync ReferenceImagePath to the browsed cover image
+                if (File.Exists(CoverImagePath))
+                {
+                    ReferenceImagePath = CompressImageIfNeeded(CoverImagePath, GetScenesFolder());
+                    SaveState();
+                    AppLogger.Log($"RunAll: Synced ReferenceImagePath to browsed cover: {ReferenceImagePath}");
+                }
+            }
+            // ===== END: Auto-generate cover image =====
+
+            // Pipeline timer: 3 steps (บท → ภาพ+เสียง → วิดีโอ)
+            StartPipelineTimer(3);
+            SetPipelineStep("สร้างบท");
+
             // Step 0: Generate scripts (must complete before images & audio)
             CurrentStepIndex = 0;
             await GenerateSceneScriptAsync();
             _processingCts.Token.ThrowIfCancellationRequested();
+
+            // Validate script generation produced scenes
+            if (AllScenes.Count == 0 || Parts.Count == 0)
+            {
+                StatusMessage = "สร้างบทไม่สำเร็จ — ไม่มี scene ที่สร้างได้";
+                MessageBox.Show(
+                    "สร้างบทไม่สำเร็จ ไม่มี scene ที่สร้างได้\n\nกรุณาลองใหม่อีกครั้ง",
+                    "บทไม่สำเร็จ", MessageBoxButton.OK, MessageBoxImage.Warning);
+                return;
+            }
+
+            // Pipeline timer: advance to step 2
+            AdvancePipelineStep("บท", "ภาพ+เสียง");
 
             // Steps 2+3: Generate images and audio in parallel
             CurrentStepIndex = 2;
@@ -1810,12 +2218,20 @@ public partial class MultiImageViewModel : ObservableObject
                 return;
             }
 
+            // Pipeline timer: advance to step 3
+            AdvancePipelineStep("ภาพ+เสียง", "วิดีโอ");
+
             // Step 4: Create video
             CurrentStepIndex = 4;
             await CreateVideoAsync();
 
+            // Pipeline timer: record final step
+            _pipelineStepTimings.Add(("วิดีโอ", DateTime.Now - _currentStepStartTime));
+            pipelineCompleted = true;
+
             AppLogger.Log("RunAll: COMPLETE");
             MessageBox.Show("สร้างวิดีโอ Multi-Image เสร็จสมบูรณ์!", "สำเร็จ", MessageBoxButton.OK, MessageBoxImage.Information);
+            SaveTopicToHistory();
 
             var folder = GetOutputFolder();
             if (Directory.Exists(folder))
@@ -1834,6 +2250,7 @@ public partial class MultiImageViewModel : ObservableObject
         }
         finally
         {
+            await StopPipelineTimer(pipelineCompleted);
             _isRunAll = false;
             IsProcessing = false;
             System.Windows.Input.CommandManager.InvalidateRequerySuggested();
@@ -1963,6 +2380,8 @@ public partial class MultiImageViewModel : ObservableObject
         _processingCts?.Cancel();
         StatusMessage = "ยกเลิกการทำงาน";
         CurrentProgress = 0;
+        IsPipelineRunning = false;
+        IsPipelineComplete = false;
     }
 
     [RelayCommand]
@@ -2217,16 +2636,38 @@ public partial class MultiImageViewModel : ObservableObject
     private const long MaxCoverImageBytes = 2 * 1024 * 1024; // 2MB
 
     /// <summary>Compress image to ≤2MB if needed. Returns original path if already small enough.</summary>
-    internal static string CompressImageIfNeeded(string imagePath, string outputFolder)
+    internal static string CompressImageIfNeeded(string imagePath, string outputFolder, string outputFileName = "cover_compressed.jpg")
     {
+        // Validate inputs first
+        if (string.IsNullOrWhiteSpace(imagePath))
+        {
+            AppLogger.Log("CompressImageIfNeeded: imagePath is null or empty");
+            return imagePath;
+        }
+
+        if (string.IsNullOrWhiteSpace(outputFolder))
+        {
+            AppLogger.Log("CompressImageIfNeeded: outputFolder is null or empty");
+            return imagePath;
+        }
+
         try
         {
             var fileInfo = new FileInfo(imagePath);
             if (!fileInfo.Exists || fileInfo.Length <= MaxCoverImageBytes)
                 return imagePath;
 
-            Directory.CreateDirectory(outputFolder);
-            var compressedPath = Path.Combine(outputFolder, "cover_compressed.jpg");
+            // Create output directory - this can throw if path is invalid
+            try
+            {
+                Directory.CreateDirectory(outputFolder);
+            }
+            catch (Exception ex) when (ex is UnauthorizedAccessException or PathTooLongException)
+            {
+                AppLogger.LogError(ex, $"CompressImageIfNeeded: Cannot create output folder: {outputFolder}");
+                return imagePath; // Fallback to original
+            }
+            var compressedPath = Path.Combine(outputFolder, outputFileName);
 
             var bi = new BitmapImage();
             bi.BeginInit();
@@ -2270,9 +2711,16 @@ public partial class MultiImageViewModel : ObservableObject
             AppLogger.Log($"Cover compressed (final): {fileInfo.Length / 1024}KB → {finalMs.Length / 1024}KB");
             return compressedPath;
         }
+        catch (Exception ex) when (ex is OutOfMemoryException or NotSupportedException or System.IO.IOException)
+        {
+            // These are recoverable errors - fallback to original image
+            AppLogger.LogError(ex, $"CompressImageIfNeeded failed (recoverable): {ex.GetType().Name}, using original");
+            return imagePath;
+        }
         catch (Exception ex)
         {
-            AppLogger.LogError(ex, "CompressImageIfNeeded failed, using original");
+            // Unexpected errors - log and fallback to original (safer than crashing)
+            AppLogger.LogError(ex, $"CompressImageIfNeeded failed (unexpected): {ex.GetType().Name}, using original");
             return imagePath;
         }
     }
@@ -2287,11 +2735,233 @@ public partial class MultiImageViewModel : ObservableObject
         return sanitized;
     }
 
+    // === Cover Image Generation ===
+    private string GenerateCoverImagePrompt(string topicTitle, ContentCategory category, bool hasReferenceImage)
+    {
+        var refLine = hasReferenceImage
+            ? $"ให้ออกมาโทนสีและสไตล์คล้ายกับภาพตัวอย่างที่แนบมา แต่เปลี่ยนบริบทรูปให้เกี่ยวกับหมวดหมู่: {category.DisplayName}"
+            : $"หมวดหมู่: {category.DisplayName}";
+
+        return $@"ช่วยสร้างภาพปกสไตล์วินเทจสำหรับ podcast ไทย
+ชื่อเรื่อง: ""{topicTitle}""
+
+{refLine}
+
+รายละเอียด:
+- แสดงชื่อเรื่อง ""{topicTitle}"" ในภาพด้วยอักษรไทยที่อ่านง่าย
+- สไตล์โปสเตอร์วินเทจไทย บรรยากาศอบอุ่น
+- ขนาดภาพ 16:9 เหมาะสำหรับ YouTube thumbnail";
+    }
+
+    [RelayCommand]
+    private async Task GenerateCoverImageAsync()
+    {
+        if (string.IsNullOrWhiteSpace(TopicText))
+        {
+            MessageBox.Show("กรุณาใส่หัวข้อเรื่องก่อน", "แจ้งเตือน", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        // Validate Google API Key
+        if (string.IsNullOrWhiteSpace(_settings.GoogleApiKey))
+        {
+            MessageBox.Show("กรุณาตั้งค่า Google API Key ก่อน\n\nเปิด Settings → Google API Key (TTS)",
+                            "ต้องการ API Key", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
+        try
+        {
+            IsProcessing = true;
+            StatusMessage = "กำลังสร้างภาพปก...";
+            CurrentProgress = 0;
+            _processingCts?.Cancel();
+            _processingCts = new CancellationTokenSource();
+
+            // Use reference image if available
+            string? refImagePath = null;
+            if (!string.IsNullOrEmpty(_settings.ReferenceImagePath))
+            {
+                if (File.Exists(_settings.ReferenceImagePath))
+                {
+                    refImagePath = _settings.ReferenceImagePath;
+                }
+                else
+                {
+                    StatusMessage = "⚠️ รูปอ้างอิงไม่พบ — สร้างภาพโดยไม่มี reference style";
+                }
+            }
+
+            // Always regenerate prompt based on current topic and category
+            StatusMessage = "กำลังสร้าง Prompt สำหรับภาพปก...";
+            CoverImagePrompt = GenerateCoverImagePrompt(TopicText, SelectedCategory, refImagePath != null);
+
+            // Retry up to 3 times with same parameters
+            byte[]? imageBytes = null;
+            Exception? lastException = null;
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    StatusMessage = attempt == 1
+                        ? "กำลังสร้างภาพปก (อาจใช้เวลาสักครู่)..."
+                        : $"กำลังพยายามสร้างภาพปกครั้งที่ {attempt}/3...";
+
+                    imageBytes = await _googleTtsService.GenerateImageAsync(
+                        CoverImagePrompt,
+                        _settings.CloudImageModel,
+                        refImagePath,
+                        "16:9",
+                        _processingCts.Token);
+
+                    break; // Success - exit retry loop
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Re-throw immediately - user wants to cancel
+                }
+                catch (Exception ex)
+                {
+                    lastException = ex;
+                    if (attempt < 3)
+                    {
+                        StatusMessage = $"พยายามครั้งที่ {attempt} ล้มเหลว — รอ 2 วินาทีแล้วลองใหม่...";
+                        await Task.Delay(2000, _processingCts.Token);
+                    }
+                }
+            }
+
+            if (imageBytes == null)
+            {
+                throw lastException ?? new Exception("ไม่สามารถสร้างภาพปกได้หลังจากพยายาม 3 ครั้ง");
+            }
+
+            // Save the generated image
+            var outputFolder = GetOutputFolder();
+            Directory.CreateDirectory(outputFolder);
+
+            var imagePath = Path.Combine(outputFolder, $"ปกไทย_ep{EpisodeNumber}.png");
+            await File.WriteAllBytesAsync(imagePath, imageBytes);
+
+            CoverImagePath = imagePath;
+            StatusMessage = "สร้างภาพปกสำเร็จ";
+            CurrentProgress = 100;
+            SaveState();
+
+            SnackbarQueue.Enqueue("สร้างภาพปกสำเร็จ!");
+
+            AppLogger.Log($"Cover image generated: {imagePath}");
+        }
+        catch (OperationCanceledException)
+        {
+            StatusMessage = "ยกเลิกการสร้างภาพปก";
+        }
+        catch (Exception ex)
+        {
+            AppLogger.LogError(ex, "GenerateCoverImageAsync failed");
+            StatusMessage = $"เกิดข้อผิดพลาด: {ex.Message}";
+            MessageBox.Show($"ไม่สามารถสร้างภาพปกได้: {ex.Message}\n\nลองใช้ปุ่ม Browse เลือกรูปแทน หรือสร้างภาพปกใน MainWindow ก่อน",
+                            "ข้อผิดพลาด", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+        finally
+        {
+            IsProcessing = false;
+        }
+    }
+
+    [RelayCommand]
+    private void BrowseCoverImage()
+    {
+        var dialog = new OpenFileDialog
+        {
+            Filter = "Image files (*.png;*.jpg;*.jpeg)|*.png;*.jpg;*.jpeg|All files (*.*)|*.*",
+            Title = "เลือกภาพปก"
+        };
+
+        if (dialog.ShowDialog() == true)
+        {
+            // Validate file exists (race condition protection)
+            if (File.Exists(dialog.FileName))
+            {
+                try
+                {
+                    // Copy to project folder to prevent external file deletion issues
+                    var outputFolder = GetOutputFolder();
+                    Directory.CreateDirectory(outputFolder);
+
+                    var extension = Path.GetExtension(dialog.FileName);
+                    var targetPath = Path.Combine(outputFolder, $"cover_browsed{extension}");
+
+                    // Copy file (overwrite if exists)
+                    File.Copy(dialog.FileName, targetPath, overwrite: true);
+
+                    // Always set CoverImagePath if file copy succeeded
+                    CoverImagePath = targetPath;
+
+                    // Non-blocking validation: warn if image might have issues
+                    try
+                    {
+                        using var stream = File.OpenRead(targetPath);
+                        var bitmap = new System.Windows.Media.Imaging.BitmapImage();
+                        bitmap.BeginInit();
+                        bitmap.CacheOption = System.Windows.Media.Imaging.BitmapCacheOption.OnLoad;
+                        bitmap.StreamSource = stream;
+                        bitmap.EndInit();
+                    }
+                    catch (Exception valEx)
+                    {
+                        AppLogger.Log($"BrowseCoverImage: Image validation warning: {valEx.Message}");
+                        SnackbarQueue.Enqueue("⚠️ ภาพอาจแสดงผลไม่ถูกต้อง แต่ยังใช้งานได้");
+                    }
+
+                    // Auto-sync reference image to match browsed cover
+                    ReferenceImagePath = CompressImageIfNeeded(targetPath, GetScenesFolder());
+                    AppLogger.Log($"BrowseCoverImage: Synced ReferenceImagePath to: {ReferenceImagePath}");
+
+                    SaveState();
+                    SnackbarQueue.Enqueue($"คัดลอกภาพปกเข้าโปรเจกต์แล้ว");
+                    AppLogger.Log($"BrowseCoverImage: Copied from '{dialog.FileName}' to '{targetPath}'");
+                }
+                catch (Exception ex)
+                {
+                    AppLogger.LogError(ex, "BrowseCoverImage: Failed to copy file");
+                    SnackbarQueue.Enqueue($"⚠️ คัดลอกไฟล์ไม่สำเร็จ: {ex.Message}");
+                }
+            }
+            else
+            {
+                SnackbarQueue.Enqueue("⚠️ ไฟล์ไม่พบ กรุณาลองใหม่");
+            }
+        }
+    }
+
+    [RelayCommand]
+    private void OpenYouTubeCover()
+    {
+        if (!string.IsNullOrWhiteSpace(CoverImageForYouTubePath) && File.Exists(CoverImageForYouTubePath))
+        {
+            try
+            {
+                // Open file in Explorer with the file selected
+                System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{CoverImageForYouTubePath}\"");
+            }
+            catch (Exception ex)
+            {
+                AppLogger.LogError(ex, "OpenYouTubeCover failed");
+                SnackbarQueue.Enqueue($"เปิดไฟล์ไม่ได้: {ex.Message}");
+            }
+        }
+        else
+        {
+            SnackbarQueue.Enqueue("ยังไม่มีภาพปก YouTube");
+        }
+    }
+
     private void UpdateStepCompletion()
     {
         StepCompleted[0] = Parts.Count == 3 && Parts.All(p => p.Scenes.Count > 0);
         StepCompleted[1] = StepCompleted[0]; // Review is optional
-        StepCompleted[2] = AllScenes.Any(s => !string.IsNullOrWhiteSpace(s.ImagePath) && File.Exists(s.ImagePath));
+        StepCompleted[2] = AllScenes.Count > 0 && AllScenes.All(s => !string.IsNullOrWhiteSpace(s.ImagePath) && File.Exists(s.ImagePath));
         StepCompleted[3] = Parts.All(p => !string.IsNullOrWhiteSpace(p.AudioPath) && File.Exists(p.AudioPath));
         StepCompleted[4] = !string.IsNullOrWhiteSpace(FinalVideoPath) && File.Exists(FinalVideoPath);
         StepCompleted[5] = StepCompleted[4];
@@ -2326,7 +2996,9 @@ public partial class MultiImageViewModel : ObservableObject
             BgmFilePath = BgmFilePath,
             BgmVolume = BgmVolume,
             BgmEnabled = BgmEnabled,
-            CategoryKey = SelectedCategory.Key
+            CategoryKey = SelectedCategory.Key,
+            CoverImagePath = CoverImagePath,
+            CoverImagePrompt = CoverImagePrompt
         };
 
         foreach (var part in Parts)
@@ -2429,14 +3101,29 @@ public partial class MultiImageViewModel : ObservableObject
         if (state == null || !state.HasData()) return false;
         if (state.EpisodeNumber != EpisodeNumber) return false;
 
-        RestoreFromState(state);
+        RestoreFromState(state, outputFolder);
         return true;
     }
 
-    private void RestoreFromState(MultiImageState state)
+    private void RestoreFromState(MultiImageState state, string actualOutputFolder)
     {
         _isRestoringState = true;
-        TopicText = state.TopicText;
+
+        // Extract topic from actual folder path to ensure consistency
+        // This handles cases where TopicText had special characters that were sanitized
+        var folderName = Path.GetFileName(actualOutputFolder);
+        var match = System.Text.RegularExpressions.Regex.Match(folderName, @"^EP\d+\s+(.+)$");
+        if (match.Success)
+        {
+            TopicText = match.Groups[1].Value.Trim();
+            AppLogger.Log($"RestoreFromState: Extracted TopicText from folder: '{TopicText}' (EP{state.EpisodeNumber})");
+        }
+        else
+        {
+            // Fallback to state if folder name doesn't match pattern
+            TopicText = state.TopicText;
+            AppLogger.Log($"RestoreFromState: Using TopicText from state: '{TopicText}' (EP{state.EpisodeNumber})");
+        }
         CurrentStepIndex = state.CurrentStepIndex;
         FinalVideoPath = state.FinalVideoPath;
         ReferenceImagePath = state.ReferenceImagePath;
@@ -2472,6 +3159,10 @@ public partial class MultiImageViewModel : ObservableObject
         BgmFilePath = state.BgmFilePath ?? "";
         BgmVolume = state.BgmVolume > 0.001 ? state.BgmVolume : 0.25;
         SyncBgmSelection();
+
+        // Restore cover image
+        CoverImagePath = state.CoverImagePath ?? "";
+        CoverImagePrompt = state.CoverImagePrompt ?? "";
 
         Parts.Clear();
         foreach (var pd in state.Parts)

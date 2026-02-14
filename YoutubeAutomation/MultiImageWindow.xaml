@@ -25,6 +25,7 @@
         <local:StepStateToForegroundConverter x:Key="StepStateToForegroundConverter"/>
         <local:NotEqualToVisibilityConverter x:Key="NotEqualToVisibilityConverter"/>
         <local:FilePathToImageConverter x:Key="FilePathToImageConverter"/>
+        <local:InverseBoolToVisibilityConverter x:Key="InverseBoolToVisConverter"/>
 
         <sys:Int32 x:Key="Step0">0</sys:Int32>
         <sys:Int32 x:Key="Step1">1</sys:Int32>
@@ -237,12 +238,118 @@
                                                 </DataTrigger>
                                                 <DataTrigger Binding="{Binding IsCategoryLocked}" Value="True">
                                                     <Setter Property="IsEnabled" Value="False"/>
+                                                    <Setter Property="ToolTip" Value="หมวดหมู่ถูกล็อกเพื่อรักษาความสอดคล้องของบท&#x0a;ถ้าต้องการเปลี่ยนให้ลบบททั้งหมดก่อน"/>
                                                 </DataTrigger>
                                             </Style.Triggers>
                                         </Style>
                                     </ComboBox.Style>
                                 </ComboBox>
                             </StackPanel>
+
+                            <!-- Cover Image Section -->
+                            <Border BorderBrush="{DynamicResource PrimaryHueMidBrush}" BorderThickness="1"
+                                    CornerRadius="4" Padding="12" Margin="0,12,0,12">
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                    </Grid.ColumnDefinitions>
+
+                                    <!-- Cover Image Preview -->
+                                    <Border Width="160" Height="90" Background="LightGray" CornerRadius="4"
+                                            VerticalAlignment="Center" BorderBrush="Gray" BorderThickness="1">
+                                        <Grid>
+                                            <Image Source="{Binding CoverImagePath, Converter={StaticResource FilePathToImageConverter}}"
+                                                   Stretch="Uniform"/>
+                                            <TextBlock Text="(ยังไม่มีภาพปก)" FontSize="11" Opacity="0.5"
+                                                       HorizontalAlignment="Center" VerticalAlignment="Center">
+                                                <TextBlock.Style>
+                                                    <Style TargetType="TextBlock">
+                                                        <Setter Property="Visibility" Value="Collapsed"/>
+                                                        <Style.Triggers>
+                                                            <DataTrigger Binding="{Binding CoverImagePath}" Value="">
+                                                                <Setter Property="Visibility" Value="Visible"/>
+                                                            </DataTrigger>
+                                                        </Style.Triggers>
+                                                    </Style>
+                                                </TextBlock.Style>
+                                            </TextBlock>
+                                        </Grid>
+                                    </Border>
+
+                                    <!-- Cover Image Info + Controls -->
+                                    <StackPanel Grid.Column="1" Margin="12,0,0,0" VerticalAlignment="Center">
+                                        <StackPanel Orientation="Horizontal" Margin="0,0,0,4">
+                                            <materialDesign:PackIcon Kind="ImageArea" Width="18" Height="18"
+                                                                     VerticalAlignment="Center" Margin="0,0,6,0"
+                                                                     Foreground="{DynamicResource PrimaryHueMidBrush}"/>
+                                            <TextBlock Text="ภาพปก (Cover Image)" FontWeight="Bold" FontSize="13"/>
+                                        </StackPanel>
+                                        <TextBlock Text="ภาพปกจะถูกสร้างอัตโนมัติตอน RunAll (ถ้ายังไม่มี) หรือกดปุ่มด้านล่างเพื่อสร้างทันที"
+                                                   FontSize="11" Opacity="0.6" TextWrapping="Wrap" Margin="0,0,0,8"/>
+
+                                        <StackPanel Orientation="Horizontal">
+                                            <Button Command="{Binding GenerateCoverImageCommand}"
+                                                    Style="{StaticResource MaterialDesignRaisedButton}"
+                                                    Padding="12,4" Height="32" FontSize="12"
+                                                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <materialDesign:PackIcon Kind="AutoFix" Width="16" Height="16" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="สร้างภาพปก" Margin="6,0,0,0"/>
+                                                </StackPanel>
+                                            </Button>
+                                            <Button Command="{Binding BrowseCoverImageCommand}"
+                                                    Style="{StaticResource MaterialDesignOutlinedButton}"
+                                                    Padding="8,4" Height="32" FontSize="12" Margin="8,0,0,0"
+                                                    IsEnabled="{Binding IsProcessing, Converter={StaticResource InverseBooleanConverter}}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <materialDesign:PackIcon Kind="FolderImage" Width="16" Height="16" VerticalAlignment="Center"/>
+                                                    <TextBlock Text="เลือกภาพ" Margin="4,0,0,0"/>
+                                                </StackPanel>
+                                            </Button>
+                                        </StackPanel>
+
+                                        <!-- Show cover path if exists -->
+                                        <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                            <StackPanel.Style>
+                                                <Style TargetType="StackPanel">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding CoverImagePath}" Value="">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </StackPanel.Style>
+                                            <materialDesign:PackIcon Kind="Folder" Width="10" Height="10"
+                                                                     VerticalAlignment="Center" Margin="0,0,4,0" Opacity="0.5"/>
+                                            <TextBlock Text="{Binding CoverImagePath}" FontSize="10" Opacity="0.5"
+                                                       TextTrimming="CharacterEllipsis" VerticalAlignment="Center"/>
+                                        </StackPanel>
+
+                                        <!-- YouTube cover (≤2MB) button -->
+                                        <Button Command="{Binding OpenYouTubeCoverCommand}"
+                                                Padding="4,2" Height="26" FontSize="11" Margin="0,4,0,0"
+                                                HorizontalAlignment="Left"
+                                                ToolTip="{Binding CoverImageForYouTubePath}">
+                                            <Button.Style>
+                                                <Style TargetType="Button" BasedOn="{StaticResource MaterialDesignFlatButton}">
+                                                    <Setter Property="Visibility" Value="Visible"/>
+                                                    <Style.Triggers>
+                                                        <DataTrigger Binding="{Binding CoverImageForYouTubePath}" Value="">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Button.Style>
+                                            <StackPanel Orientation="Horizontal">
+                                                <materialDesign:PackIcon Kind="Youtube" Width="14" Height="14" VerticalAlignment="Center" Foreground="Red"/>
+                                                <TextBlock Text="เปิดภาพปก YouTube (≤2MB)" Margin="4,0,0,0"/>
+                                            </StackPanel>
+                                        </Button>
+                                    </StackPanel>
+                                </Grid>
+                            </Border>
 
                             <TextBlock Text="หัวข้อเรื่อง:" Margin="0,0,0,8"/>
                             <Grid>
@@ -1024,46 +1131,106 @@
 
         <!-- Footer -->
         <materialDesign:Card Grid.Row="3" Margin="16,8,16,16" Padding="16">
-            <Grid>
-                <Grid.ColumnDefinitions>
-                    <ColumnDefinition Width="*"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                    <ColumnDefinition Width="Auto"/>
-                </Grid.ColumnDefinitions>
+            <StackPanel>
 
-                <StackPanel>
-                    <TextBlock Text="{Binding StatusMessage}" Margin="0,0,0,8"/>
-                    <ProgressBar Value="{Binding CurrentProgress}" Height="8"
-                                Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"/>
-                </StackPanel>
+                <!-- Pipeline Tracker Row (visible during RunAll / Auto only) -->
+                <Border Margin="0,0,0,8" Padding="8,6" CornerRadius="4"
+                        Background="{DynamicResource MaterialDesign.Brush.Card.Background}"
+                        BorderBrush="{DynamicResource PrimaryHueMidBrush}"
+                        BorderThickness="1"
+                        Visibility="{Binding IsPipelineRunning, Converter={StaticResource BooleanToVisibilityConverter}}">
+                    <Grid>
+                        <!-- Running state -->
+                        <Grid Visibility="{Binding IsPipelineComplete, Converter={StaticResource InverseBoolToVisConverter}}">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto"/>
+                                <ColumnDefinition Width="*"/>
+                                <ColumnDefinition Width="Auto"/>
+                            </Grid.ColumnDefinitions>
 
-                <Button Grid.Column="1" Command="{Binding CancelProcessingCommand}"
-                        Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
-                        Style="{StaticResource MaterialDesignOutlinedButton}" Margin="16,0,8,0"
-                        Foreground="Red" BorderBrush="Red">
-                    <StackPanel Orientation="Horizontal">
-                        <materialDesign:PackIcon Kind="Cancel" VerticalAlignment="Center"/>
-                        <TextBlock Text="ยกเลิก" Margin="4,0,0,0"/>
+                            <!-- Current step chip -->
+                            <Border Grid.Column="0" Background="{DynamicResource PrimaryHueMidBrush}"
+                                    CornerRadius="8" Padding="10,4" VerticalAlignment="Center">
+                                <StackPanel Orientation="Horizontal">
+                                    <materialDesign:PackIcon Kind="PlayCircle" Width="16" Height="16"
+                                                             Foreground="White" VerticalAlignment="Center"/>
+                                    <TextBlock Text="{Binding PipelineStepLabel}" Foreground="White"
+                                               FontWeight="Medium" Margin="6,0,0,0"
+                                               VerticalAlignment="Center" FontSize="13"/>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- Completed steps -->
+                            <TextBlock Grid.Column="1" Text="{Binding PipelineCompletedSteps}"
+                                       Foreground="{DynamicResource MaterialDesign.Brush.Foreground.Light}"
+                                       VerticalAlignment="Center" Margin="12,0,0,0"
+                                       FontSize="12" TextTrimming="CharacterEllipsis"/>
+
+                            <!-- Total elapsed timer -->
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" VerticalAlignment="Center"
+                                        Margin="8,0,0,0">
+                                <materialDesign:PackIcon Kind="Timer" Width="18" Height="18"
+                                                         Foreground="{DynamicResource PrimaryHueMidBrush}"
+                                                         VerticalAlignment="Center"/>
+                                <TextBlock Text="{Binding PipelineElapsedText}"
+                                           FontSize="16" FontWeight="Bold"
+                                           Foreground="{DynamicResource PrimaryHueMidBrush}"
+                                           VerticalAlignment="Center" Margin="6,0,0,0"/>
+                            </StackPanel>
+                        </Grid>
+
+                        <!-- Completion summary -->
+                        <TextBlock Text="{Binding PipelineSummary}"
+                                   Visibility="{Binding IsPipelineComplete, Converter={StaticResource BooleanToVisibilityConverter}}"
+                                   FontSize="13" FontWeight="Medium"
+                                   Foreground="{DynamicResource PrimaryHueMidBrush}"
+                                   TextWrapping="Wrap"/>
+                    </Grid>
+                </Border>
+
+                <!-- Status + Navigation Row (unchanged) -->
+                <Grid>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+
+                    <StackPanel>
+                        <TextBlock Text="{Binding StatusMessage}" Margin="0,0,0,8"/>
+                        <ProgressBar Value="{Binding CurrentProgress}" Height="8"
+                                    Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"/>
                     </StackPanel>
-                </Button>
 
-                <Button Grid.Column="2" Command="{Binding PreviousStepCommand}"
-                        Style="{StaticResource MaterialDesignOutlinedButton}" Margin="8,0,8,0">
-                    <StackPanel Orientation="Horizontal">
-                        <materialDesign:PackIcon Kind="ChevronLeft" VerticalAlignment="Center"/>
-                        <TextBlock Text="ย้อนกลับ" Margin="4,0,0,0"/>
-                    </StackPanel>
-                </Button>
+                    <Button Grid.Column="1" Command="{Binding CancelProcessingCommand}"
+                            Visibility="{Binding IsProcessing, Converter={StaticResource BooleanToVisibilityConverter}}"
+                            Style="{StaticResource MaterialDesignOutlinedButton}" Margin="16,0,8,0"
+                            Foreground="Red" BorderBrush="Red">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon Kind="Cancel" VerticalAlignment="Center"/>
+                            <TextBlock Text="ยกเลิก" Margin="4,0,0,0"/>
+                        </StackPanel>
+                    </Button>
 
-                <Button Grid.Column="3" Command="{Binding NextStepCommand}"
-                        Style="{StaticResource MaterialDesignRaisedButton}">
-                    <StackPanel Orientation="Horizontal">
-                        <TextBlock Text="ถัดไป" Margin="0,0,4,0"/>
-                        <materialDesign:PackIcon Kind="ChevronRight" VerticalAlignment="Center"/>
-                    </StackPanel>
-                </Button>
-            </Grid>
+                    <Button Grid.Column="2" Command="{Binding PreviousStepCommand}"
+                            Style="{StaticResource MaterialDesignOutlinedButton}" Margin="8,0,8,0">
+                        <StackPanel Orientation="Horizontal">
+                            <materialDesign:PackIcon Kind="ChevronLeft" VerticalAlignment="Center"/>
+                            <TextBlock Text="ย้อนกลับ" Margin="4,0,0,0"/>
+                        </StackPanel>
+                    </Button>
+
+                    <Button Grid.Column="3" Command="{Binding NextStepCommand}"
+                            Style="{StaticResource MaterialDesignRaisedButton}">
+                        <StackPanel Orientation="Horizontal">
+                            <TextBlock Text="ถัดไป" Margin="0,0,4,0"/>
+                            <materialDesign:PackIcon Kind="ChevronRight" VerticalAlignment="Center"/>
+                        </StackPanel>
+                    </Button>
+                </Grid>
+
+            </StackPanel>
         </materialDesign:Card>
 
         <!-- Snackbar -->

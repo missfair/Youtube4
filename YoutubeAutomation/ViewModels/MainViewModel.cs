@@ -9,6 +9,7 @@ using NAudio.Wave;
 using YoutubeAutomation.Models;
 using YoutubeAutomation.Prompts;
 using Microsoft.Extensions.DependencyInjection;
+using YoutubeAutomation.Services;
 using YoutubeAutomation.Services.Interfaces;
 
 namespace YoutubeAutomation.ViewModels;
@@ -20,6 +21,7 @@ public partial class MainViewModel : ObservableObject
     private readonly IFfmpegService _ffmpegService;
     private readonly IDocumentService _documentService;
     private readonly ProjectSettings _settings;
+    private readonly IVideoHistoryService _historyService;
 
     // Feature 2: Cancel support
     private CancellationTokenSource? _processingCts;
@@ -27,6 +29,9 @@ public partial class MainViewModel : ObservableObject
     // Feature 3: Audio playback
     private WaveOutEvent? _waveOut;
     private AudioFileReader? _audioFileReader;
+
+    // Topic Suggestion Window tracking
+    private TopicSuggestionWindow? _topicSuggestionWindow;
 
     [ObservableProperty] private int currentStepIndex = 0;
     [ObservableProperty] private VideoProject currentProject = new();
@@ -93,13 +98,15 @@ public partial class MainViewModel : ObservableObject
         IGoogleTtsService googleTtsService,
         IFfmpegService ffmpegService,
         IDocumentService documentService,
-        ProjectSettings settings)
+        ProjectSettings settings,
+        IVideoHistoryService historyService)
     {
         _openRouterService = openRouterService;
         _googleTtsService = googleTtsService;
         _ffmpegService = ffmpegService;
         _documentService = documentService;
         _settings = settings;
+        _historyService = historyService;
         ProjectSettings = settings;
 
         // Load saved project state if exists
@@ -617,6 +624,14 @@ public partial class MainViewModel : ObservableObject
             return;
         }
 
+        // Validate Google API Key
+        if (string.IsNullOrWhiteSpace(_settings.GoogleApiKey))
+        {
+            MessageBox.Show("กรุณาตั้งค่า Google API Key ก่อน\n\nเปิด Settings → Google API Key (TTS)",
+                            "ต้องการ API Key", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return;
+        }
+
         try
         {
             IsProcessing = true;
@@ -627,34 +642,64 @@ public partial class MainViewModel : ObservableObject
 
             var progress = new Progress<int>(p => CurrentProgress = p);
 
-            // First generate the image prompt if not already done
-            if (string.IsNullOrWhiteSpace(CoverImagePrompt))
-            {
-                StatusMessage = "กำลังสร้าง Prompt...";
-                CoverImagePrompt = await _openRouterService.GenerateImagePromptAsync(
-                    topicTitle,
-                    _settings.ImagePromptModel,
-                    _processingCts.Token,
-                    SelectedCategory);
-            }
-
-            StatusMessage = "กำลังสร้างรูปปก (อาจใช้เวลาสักครู่)...";
-
             // Use reference image if available
             string? refImagePath = null;
-            if (!string.IsNullOrEmpty(_settings.ReferenceImagePath) && File.Exists(_settings.ReferenceImagePath))
+            if (!string.IsNullOrEmpty(_settings.ReferenceImagePath))
             {
-                refImagePath = _settings.ReferenceImagePath;
+                if (File.Exists(_settings.ReferenceImagePath))
+                {
+                    refImagePath = _settings.ReferenceImagePath;
+                }
+                else
+                {
+                    StatusMessage = "⚠️ รูปอ้างอิงไม่พบ — สร้างภาพโดยไม่มี reference style";
+                }
             }
 
-            var imageBytes = await _openRouterService.GenerateImageAsync(
-                CoverImagePrompt,
-                _settings.ImageGenerationModel,
-                refImagePath,
-                progress,
-                _processingCts.Token,
-                topicTitle,
-                SelectedCategory);
+            // Always regenerate prompt based on current topic and category
+            StatusMessage = "กำลังสร้าง Prompt...";
+            var cat = SelectedCategory ?? ContentCategoryRegistry.Animal;
+            CoverImagePrompt = GenerateCoverImagePrompt(topicTitle, cat, refImagePath != null);
+
+            // Retry up to 3 times with same parameters
+            byte[]? imageBytes = null;
+            Exception? lastException = null;
+            for (int attempt = 1; attempt <= 3; attempt++)
+            {
+                try
+                {
+                    StatusMessage = attempt == 1
+                        ? "กำลังสร้างรูปปก (อาจใช้เวลาสักครู่)..."
+                        : $"กำลังพยายามสร้างรูปปกครั้งที่ {attempt}/3...";
+
+                    imageBytes = await _googleTtsService.GenerateImageAsync(
+                        CoverImagePrompt,
+                        _settings.CloudImageModel,
+                        refImagePath,
+                        "16:9",
+                        _processingCts.Token);
+
+                    break; // Success - exit retry loop
+                }
+                catch (OperationCanceledException)
+                {
+                    throw; // Re-throw immediately - user wants to cancel
+                }
+                catch (Exception ex)
+                {
+                    lastException = ex;
+                    if (attempt < 3)
+                    {
+                        StatusMessage = $"พยายามครั้งที่ {attempt} ล้มเหลว — รอ 2 วินาทีแล้วลองใหม่...";
+                        await Task.Delay(2000, _processingCts.Token);
+                    }
+                }
+            }
+
+            if (imageBytes == null)
+            {
+                throw lastException ?? new Exception("ไม่สามารถสร้างรูปปกได้หลังจากพยายาม 3 ครั้ง");
+            }
 
             // Save the generated image
             var outputFolder = GetOutputFolder();
@@ -695,6 +740,23 @@ public partial class MainViewModel : ObservableObject
             OnPropertyChanged(nameof(ProjectSettings));
             StatusMessage = "เลือกรูปอ้างอิงแล้ว";
         }
+    }
+
+    private string GenerateCoverImagePrompt(string topicTitle, ContentCategory category, bool hasReferenceImage)
+    {
+        var refLine = hasReferenceImage
+            ? $"ให้ออกมาโทนสีและสไตล์คล้ายกับภาพตัวอย่างที่แนบมา แต่เปลี่ยนบริบทรูปให้เกี่ยวกับหมวดหมู่: {category.DisplayName}"
+            : $"หมวดหมู่: {category.DisplayName}";
+
+        return $@"ช่วยสร้างภาพปกสไตล์วินเทจสำหรับ podcast ไทย
+ชื่อเรื่อง: ""{topicTitle}""
+
+{refLine}
+
+รายละเอียด:
+- แสดงชื่อเรื่อง ""{topicTitle}"" ในภาพด้วยอักษรไทยที่อ่านง่าย
+- สไตล์โปสเตอร์วินเทจไทย บรรยากาศอบอุ่น
+- ขนาดภาพ 16:9 เหมาะสำหรับ YouTube thumbnail";
     }
 
     // Run All Flow - Automate entire workflow
@@ -778,32 +840,64 @@ public partial class MainViewModel : ObservableObject
             {
                 StatusMessage = $"[{currentStep}/{totalSteps}] กำลังสร้างรูปปก...";
 
-                // Generate image prompt first
-                if (string.IsNullOrWhiteSpace(CoverImagePrompt))
-                {
-                    CoverImagePrompt = await _openRouterService.GenerateImagePromptAsync(
-                        topicTitle,
-                        _settings.ImagePromptModel,
-                        _processingCts.Token,
-                        SelectedCategory);
-                }
-
                 try
                 {
                     string? refImagePath = null;
-                    if (!string.IsNullOrEmpty(_settings.ReferenceImagePath) && File.Exists(_settings.ReferenceImagePath))
+                    if (!string.IsNullOrEmpty(_settings.ReferenceImagePath))
                     {
-                        refImagePath = _settings.ReferenceImagePath;
+                        if (File.Exists(_settings.ReferenceImagePath))
+                        {
+                            refImagePath = _settings.ReferenceImagePath;
+                        }
+                        else
+                        {
+                            StatusMessage = $"[{currentStep}/{totalSteps}] ⚠️ รูปอ้างอิงไม่พบ — สร้างภาพโดยไม่มี reference";
+                        }
                     }
 
-                    var imageBytes = await _openRouterService.GenerateImageAsync(
-                        CoverImagePrompt,
-                        _settings.ImageGenerationModel,
-                        refImagePath,
-                        null,
-                        _processingCts.Token,
-                        topicTitle,
-                        SelectedCategory);
+                    // Always regenerate prompt based on current topic and category
+                    var cat = SelectedCategory ?? ContentCategoryRegistry.Animal;
+                    CoverImagePrompt = GenerateCoverImagePrompt(topicTitle, cat, refImagePath != null);
+
+                    // Retry up to 3 times with same parameters
+                    byte[]? imageBytes = null;
+                    Exception? lastException = null;
+                    for (int attempt = 1; attempt <= 3; attempt++)
+                    {
+                        try
+                        {
+                            StatusMessage = attempt == 1
+                                ? $"[{currentStep}/{totalSteps}] กำลังสร้างรูปปก..."
+                                : $"[{currentStep}/{totalSteps}] พยายามสร้างรูปปกครั้งที่ {attempt}/3...";
+
+                            imageBytes = await _googleTtsService.GenerateImageAsync(
+                                CoverImagePrompt,
+                                _settings.CloudImageModel,
+                                refImagePath,
+                                "16:9",
+                                _processingCts.Token);
+
+                            break; // Success - exit retry loop
+                        }
+                        catch (OperationCanceledException)
+                        {
+                            throw; // Re-throw immediately - user wants to cancel
+                        }
+                        catch (Exception ex)
+                        {
+                            lastException = ex;
+                            if (attempt < 3)
+                            {
+                                StatusMessage = $"[{currentStep}/{totalSteps}] พยายามครั้งที่ {attempt} ล้มเหลว — รอ 2 วินาทีแล้วลองใหม่...";
+                                await Task.Delay(2000, _processingCts.Token);
+                            }
+                        }
+                    }
+
+                    if (imageBytes == null)
+                    {
+                        throw lastException ?? new Exception("ไม่สามารถสร้างรูปปกได้หลังจากพยายาม 3 ครั้ง");
+                    }
 
                     var outputFolder = GetOutputFolder();
                     Directory.CreateDirectory(outputFolder);
@@ -916,6 +1010,7 @@ public partial class MainViewModel : ObservableObject
             StatusMessage = "รันทั้งหมดเสร็จสิ้น!";
 
             MessageBox.Show("สร้างวิดีโอเสร็จสมบูรณ์!", "สำเร็จ", MessageBoxButton.OK, MessageBoxImage.Information);
+            SaveTopicToHistory();
 
             // Open output folder
             var finalFolder = GetOutputFolder();
@@ -1314,6 +1409,7 @@ public partial class MainViewModel : ObservableObject
             StatusMessage = "สร้างวิดีโอสำเร็จ";
             CurrentProgress = 100;
             SaveProjectState();
+            SaveTopicToHistory();
         }
         catch (OperationCanceledException) { return; }
         catch (Exception ex)
@@ -1459,6 +1555,63 @@ public partial class MainViewModel : ObservableObject
         window.DataContext = vm;
         window.Owner = Application.Current.MainWindow;
         window.Show();
+    }
+
+    // Open Topic Suggestion Window
+    [RelayCommand]
+    private void OpenTopicSuggestionWindow()
+    {
+        // Check if window already exists and is open
+        if (_topicSuggestionWindow != null)
+        {
+            try
+            {
+                // Try to activate existing window
+                // This will throw if window is disposed/closed
+                if (_topicSuggestionWindow.IsVisible)
+                {
+                    _topicSuggestionWindow.Activate();
+                    return;
+                }
+            }
+            catch
+            {
+                // Window is disposed/invalid, clear reference
+                _topicSuggestionWindow = null;
+            }
+        }
+
+        // Create new window
+        _topicSuggestionWindow = App.Services.GetRequiredService<TopicSuggestionWindow>();
+        var vm = App.Services.GetRequiredService<TopicSuggestionViewModel>();
+
+        _topicSuggestionWindow.DataContext = vm;
+        _topicSuggestionWindow.Owner = Application.Current.MainWindow;
+
+        // Clear reference when window closes
+        _topicSuggestionWindow.Closed += (s, e) => _topicSuggestionWindow = null;
+
+        _topicSuggestionWindow.Show();
+    }
+
+    // Save topic to history after video completion (fire-and-forget)
+    private void SaveTopicToHistory()
+    {
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var topic = GetTopicTitle();
+                if (!string.IsNullOrWhiteSpace(topic))
+                {
+                    await _historyService.SaveTopicAsync(topic);
+                }
+            }
+            catch (Exception ex)
+            {
+                AppLogger.LogError(ex, "Failed to save topic to history");
+            }
+        });
     }
 
     // Feature 2: Cancel Processing

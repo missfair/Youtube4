@@ -182,6 +182,15 @@ public class FilePathToImageConverter : IValueConverter
         => throw new NotImplementedException();
 }
 
+public class InverseBoolToVisibilityConverter : IValueConverter
+{
+    public object Convert(object value, Type targetType, object parameter, CultureInfo culture)
+        => value is true ? Visibility.Collapsed : Visibility.Visible;
+
+    public object ConvertBack(object value, Type targetType, object parameter, CultureInfo culture)
+        => throw new NotImplementedException();
+}
+
 public class BoolToStringConverter : IValueConverter
 {
     public string TrueValue { get; set; } = "True";

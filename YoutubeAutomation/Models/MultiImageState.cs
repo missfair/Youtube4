@@ -23,6 +23,8 @@ public class MultiImageState
     public double BgmVolume { get; set; } = 0.25;
     public bool BgmEnabled { get; set; }
     public string CategoryKey { get; set; } = "animal";
+    public string CoverImagePath { get; set; } = "";
+    public string CoverImagePrompt { get; set; } = "";
     public DateTime LastSaved { get; set; }
 
     public class PartData

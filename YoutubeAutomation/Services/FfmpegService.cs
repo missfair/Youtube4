@@ -285,50 +285,63 @@ public class FfmpegService : IFfmpegService
         {
             progress?.Report(5);
 
-            // === Pass 1: Create zoompan clips per image ===
-            var clipPaths = new List<string>();
-            for (int i = 0; i < sceneImages.Count; i++)
+            // === Pass 1: Create zoompan clips per image (parallel) ===
+            var clipPaths = new string[sceneImages.Count];
+            var clipSemaphore = new SemaphoreSlim(4); // Limit to 4 concurrent FFmpeg processes
+            int clipsCompleted = 0;
+
+            var clipTasks = sceneImages.Select((scene, i) => Task.Run(async () =>
             {
-                cancellationToken.ThrowIfCancellationRequested();
-
-                var (imagePath, duration) = sceneImages[i];
-                // Add overlap for transition (except last clip)
-                var clipDuration = i < sceneImages.Count - 1
-                    ? duration + transitionDur
-                    : duration;
-
-                var frames = (int)(clipDuration * fps);
-                var clipPath = Path.Combine(tempDir, $"clip_{i:D3}.mp4");
-
-                // Alternate zoom-in and zoom-out (first image = no zoom)
-                string zoomExpr;
-                if (i == 0)
+                await clipSemaphore.WaitAsync(cancellationToken);
+                try
                 {
-                    // First image: static, no zoom
-                    zoomExpr = "1.0";
+                    var (imagePath, duration) = scene;
+                    // Add overlap for transition (except last clip)
+                    var clipDuration = i < sceneImages.Count - 1
+                        ? duration + transitionDur
+                        : duration;
+
+                    var frames = (int)(clipDuration * fps);
+                    var clipPath = Path.Combine(tempDir, $"clip_{i:D3}.mp4");
+
+                    // Alternate zoom-in and zoom-out (first image = no zoom)
+                    string zoomExpr;
+                    if (i == 0)
+                    {
+                        // First image: static, no zoom
+                        zoomExpr = "1.0";
+                    }
+                    else if (i % 2 == 1)
+                    {
+                        // Odd: Zoom out: 1.15 -> 1.0
+                        zoomExpr = $"if(eq(on\\,1)\\,1.15\\,zoom-0.15/{frames})";
+                    }
+                    else
+                    {
+                        // Even: Zoom in: 1.0 -> 1.15
+                        zoomExpr = $"if(eq(on\\,1)\\,1.0\\,zoom+0.15/{frames})";
+                    }
+
+                    var args = $"-loop 1 -i \"{imagePath}\" " +
+                        $"-vf \"scale=4000:-1,zoompan=z='{zoomExpr}':d={frames}:s=1920x1080:fps={fps}\" " +
+                        $"-c:v libx264 -preset ultrafast -pix_fmt yuv420p -t {clipDuration.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)} " +
+                        $"-y \"{clipPath}\"";
+
+                    await RunFfmpegAsync(ffmpegPath, args, cancellationToken);
+                    clipPaths[i] = clipPath;
+
+                    var done = Interlocked.Increment(ref clipsCompleted);
+                    var clipProgress = 5 + (int)(45.0 * done / sceneImages.Count);
+                    progress?.Report(clipProgress);
                 }
-                else if (i % 2 == 1)
+                finally
                 {
-                    // Odd: Zoom out: 1.15 -> 1.0
-                    zoomExpr = $"if(eq(on\\,1)\\,1.15\\,zoom-0.15/{frames})";
+                    clipSemaphore.Release();
                 }
-                else
-                {
-                    // Even: Zoom in: 1.0 -> 1.15
-                    zoomExpr = $"if(eq(on\\,1)\\,1.0\\,zoom+0.15/{frames})";
-                }
+            }, cancellationToken)).ToArray();
 
-                var args = $"-loop 1 -i \"{imagePath}\" " +
-                    $"-vf \"scale=4000:-1,zoompan=z='{zoomExpr}':d={frames}:s=1920x1080:fps={fps}\" " +
-                    $"-c:v libx264 -preset ultrafast -pix_fmt yuv420p -t {clipDuration.ToString("F2", System.Globalization.CultureInfo.InvariantCulture)} " +
-                    $"-y \"{clipPath}\"";
-
-                await RunFfmpegAsync(ffmpegPath, args, cancellationToken);
-                clipPaths.Add(clipPath);
-
-                var clipProgress = 5 + (int)(45.0 * (i + 1) / sceneImages.Count);
-                progress?.Report(clipProgress);
-            }
+            await Task.WhenAll(clipTasks);
+            clipSemaphore.Dispose();
 
             // === Pass 2: Merge audio ===
             progress?.Report(50);
@@ -355,7 +368,7 @@ public class FfmpegService : IFfmpegService
             progress?.Report(65);
 
             // === Pass 3: xfade combine clips + audio ===
-            if (clipPaths.Count == 1)
+            if (clipPaths.Length == 1)
             {
                 // Single clip: just add audio
                 var args = $"-i \"{clipPaths[0]}\" -i \"{finalAudioPath}\" " +
@@ -382,7 +395,7 @@ public class FfmpegService : IFfmpegService
                 // -/filter_complex reads filter from file, replacing deprecated -filter_complex_script
                 var args = $"{inputArgs} -i \"{finalAudioPath}\" " +
                     $"-/filter_complex \"{filterScriptPath}\" " +
-                    $"-map \"[vout]\" -map {clipPaths.Count}:a " +
+                    $"-map \"[vout]\" -map {clipPaths.Length}:a " +
                     $"{encodeArgs} -c:a aac -b:a 192k -pix_fmt yuv420p -shortest -y \"{outputPath}\"";
 
                 await RunFfmpegWithProgressAsync(ffmpegPath, args, totalDuration, progress, 65, 99, cancellationToken);
@@ -454,7 +467,7 @@ public class FfmpegService : IFfmpegService
     }
 
     private string BuildXfadeFilterScript(
-        List<string> clipPaths,
+        IReadOnlyList<string> clipPaths,
         List<(string imagePath, double durationSeconds)> sceneImages,
         double transitionDur)
     {

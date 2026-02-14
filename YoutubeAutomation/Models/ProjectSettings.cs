@@ -45,6 +45,9 @@ public class ProjectSettings
     public double BgmVolume { get; set; } = 0.25;
     public bool BgmEnabled { get; set; } = false;
 
+    // Video History
+    public string VideoHistoryFilePath { get; set; } = @"C:\Users\user\Downloads\Youtube\video_history.txt";
+
     private static readonly string SettingsPath = Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
         "YoutubeAutomation",
